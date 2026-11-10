@@ -1,0 +1,30 @@
+# Build outputs — generated locally, never commit
+/target
+/target-build
+/dist
+/resource.res
+/icon.res
+/*.pdb
+/rustup-init.exe
+
+# Private local build & ops scripts — machine-specific, not published
+/build.bat
+/make_backup.ps1
+/make_release.py
+/_restart_test_bridge.ps1
+/ver_check.ps1
+/icon.rc
+
+# Session handoff & publication plan — local notes, not published
+/HANDOFF.md
+/PUBLICATION.md
+
+# Dev configs & test fixtures — kept locally, not published
+/llm_proxy.toml
+/llm_proxy_dist.toml
+/test
+
+# Icon generators — the generated icons already live in assets/
+/make_app_icon.py
+/make_dots.py
+/make_icon.py

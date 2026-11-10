@@ -1,0 +1,27 @@
+# llm_proxy — BRIDGE (remote connection) sample config
+#
+# TEMPLATE: after editing, rename this file (e.g. llm_proxy_bridge.toml) and
+# start with:  llm_proxy.exe llm_proxy_bridge.toml --silent
+#
+# This instance has NO local backend: every request is forwarded to another
+# llm_proxy (the "remote"), and the local dashboard mirrors the remote's
+# /api/stats feed (GPU/CPU/RAM, recent requests, animated background).
+# Run it on any machine that can reach the remote over the network.
+#
+# No profiles here: in bridge mode `active_profile` / `[profiles.*]` are
+# rejected at parse — there is nothing local to manage.
+
+# 'host:port' of the remote llm_proxy — its [proxy] port, not its backend.
+# LAN example: the remote machine's IP. Same machine: 127.0.0.1.
+remote = '192.168.1.50:9931'
+
+# The remote's token, if the remote's toml has one (it sends it on every
+# forwarded request; with a wrong/missing token the remote answers 401).
+# If the remote has NO token, delete this line.
+token = 'PASTE-REMOTE-TOKEN'
+
+[proxy]
+port = 9940        # local proxy port — clients (e.g. pi) point here:
+                   # http://127.0.0.1:9940/v1
+stats_port = 9941  # local stats/web server — dashboard mirror:
+                   # http://127.0.0.1:9941

@@ -1,0 +1,36 @@
+// PE resources for llm_proxy.exe (compiled by build_windows.ps1 with rc.exe):
+//   - file icon (assets\llm_proxy.ico, path relative to project root)
+//   - version info: the "Details" tab in exe Properties (bump the four
+//     version tuples below on release).
+#include <winver.h>
+
+llm_proxy_icon ICON "assets\llm_proxy.ico"
+
+1 VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3f
+FILEFLAGS       0x0
+FILEOS          0x40004
+FILETYPE        0x1
+FILESUBTYPE     0x0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "000004b0"  // system language (no fixed locale, like the configurator)
+    BEGIN
+      VALUE "CompanyName",      "domg73"
+      VALUE "FileDescription",  "llm_proxy - local OpenAI-compatible proxy for local LLM inference"
+      VALUE "FileVersion",      "1.0.0.0"
+      VALUE "InternalName",     "llm_proxy"
+      VALUE "LegalCopyright",   "Copyright (C) 2026 domg73"
+      VALUE "OriginalFilename", "llm_proxy.exe"
+      VALUE "ProductName",      "llm_proxy"
+      VALUE "ProductVersion",   "1.0.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0, 0x4b0  // LING_SYSTEM
+  END
+END
