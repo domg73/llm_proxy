@@ -18,9 +18,13 @@ active_profile = 'ninfer'
 port = 9931
 stats_port = 9935
 
-# model_id / context_length / vision are required (no defaults): until the backend
-# is up, the proxy answers /v1/models on its own. Keep them in sync with the
-# backend --max-context / --vision flags.
+# model_id: required — the id clients use. It forms the composite id
+#   <profile>/<model_id> that /v1/models advertises and the harness always
+#   addresses the model by it. If the backend reports a different id in its
+#   own /v1/models, the proxy translates to it before relaying (clients
+#   never notice). context_length / vision have no defaults: until the
+#   backend is up, the proxy answers /v1/models on its own. Keep them in
+#   sync with the backend --max-context / --vision flags.
 [profiles.ninfer]
 exe = 'C:\ninfer\ninfer-server.exe'
 workdir = 'C:\ninfer'

@@ -443,6 +443,10 @@ pub async fn stats_json(state: &Arc<AppState>) -> Response {
         .into_iter()
         .map(|k| serde_json::json!({ "id": k, "name": k, "active": k == &active_name }))
         .collect::<Vec<_>>();
+    // The model_id clients use: the configured one — the proxy translates
+    // it to the backend's own id on the relay when they differ, so the
+    // composite <profile>/<model_id> built from this stays routable.
+    let model_id = profile.model_id();
     let v = serde_json::json!({
         "started_ms": state.started_ms,
         "router_mode": state.router,
@@ -452,7 +456,7 @@ pub async fn stats_json(state: &Arc<AppState>) -> Response {
         },
         "profile": {
             "name": active_name,
-            "model_id": profile.model_id(),
+            "model_id": model_id,
             "backend_host": profile.backend_host(),
             "backend_port": profile.backend_port(),
             "backend_exe": backend_exe,

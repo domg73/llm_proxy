@@ -58,6 +58,12 @@ pub struct AppState {
     /// different semantics (llama.cpp zeroes between turns, ninfer
     /// keeps the last batch rate).
     pub metric_hist: Arc<std::sync::Mutex<std::collections::VecDeque<(std::time::Instant, f64, f64)>>>,
+    /// Resolved bare model ids: profile key → the id the backend itself
+    /// reports via its /v1/models, learned once it answers. The configured
+    /// `model_id` is only the primary guess: chat and warm /props are
+    /// rewritten with the resolved id, so a wrong or empty configured id
+    /// cannot 404 against the backend.
+    pub model_ids: tokio::sync::Mutex<std::collections::HashMap<String, String>>,
     /// Windows: second sender of the action channel — the /api/admin
     /// endpoints hand their commands to the same serialized dispatcher as
     /// the local tray (single shared lifecycle, last command wins).
@@ -280,13 +286,72 @@ pub fn composite_id(key: &str, p: &Profile) -> String {
     format!("{}/{}", key, p.model_id())
 }
 
-/// Resolve a composite model id to (profile key, profile).
-fn profile_by_composite(state: &Arc<AppState>, model: &str) -> Option<(String, Profile)> {
+/// Resolve a composite model id to (profile key, profile): the configured
+/// composite `<profile key>/<model_id>` advertised in /v1/models.
+async fn profile_by_composite(state: &Arc<AppState>, model: &str) -> Option<(String, Profile)> {
     state.config
         .profiles
         .iter()
         .find(|(k, p)| composite_id(k, p) == model)
         .map(|(k, p)| (k.clone(), p.clone()))
+}
+
+/// The bare model id `profile`'s backend actually uses: the configured
+/// `model_id`, unless the backend's /v1/models reports a different id —
+/// then the backend's own (a request carrying the configured id would
+/// 404). Resolved once the backend answers its /v1/models, then cached
+/// for the lifetime of the process.
+async fn effective_model_id(state: &Arc<AppState>, key: &str, profile: &Profile) -> String {
+    if let Some(id) = state.model_ids.lock().await.get(key) {
+        return id.clone();
+    }
+    let configured = profile.model_id();
+    let url = format!("http://{}:{}/v1/models", profile.backend_host(), profile.backend_port());
+    let text = match state
+        .client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(res) => res.text().await.ok(),
+        Err(_) => None,
+    };
+    let mut ids: Vec<String> = Vec::new();
+    if let Some(t) = text {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+            if let Some(arr) = v.get("data").and_then(|d| d.as_array()) {
+                for e in arr {
+                    if let Some(id) = e.get("id").and_then(|i| i.as_str()) {
+                        ids.push(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    let resolved = if ids.iter().any(|i| i == &configured) {
+        // Normal case: the backend confirms the configured id — no
+        // translation needed.
+        configured.clone()
+    } else if let Some(id) = ids.first() {
+        // Mismatch: the backend reports a different id — translate.
+        eprintln!(
+            "llm_proxy: profile '{key}': the backend's /v1/models does not list '{configured}' (it reports {:?}) — relaying as '{id}'",
+            ids
+        );
+        id.clone()
+    } else {
+        // Backend not answering yet (or no /v1/models): relay with the
+        // configured id for this request, but do not cache it — the next
+        // request re-checks once the backend answers.
+        configured.clone()
+    };
+    // Cache only an id backed by the backend's answer — a guess made while
+    // the backend was unreachable stays unconfirmed.
+    if !ids.is_empty() {
+        state.model_ids.lock().await.insert(key.to_string(), resolved.clone());
+    }
+    resolved
 }
 
 /// Model listing served by the proxy (cold and warm alike). Router: every
@@ -295,31 +360,27 @@ fn profile_by_composite(state: &Arc<AppState>, model: &str) -> Option<(String, P
 /// pi probes this with a 1000 ms budget,
 /// then loads the model on demand (POST /models/load) and polls
 /// /props?model= until it reports loaded.
-fn all_models(state: &Arc<AppState>) -> serde_json::Value {
+async fn all_models(state: &Arc<AppState>) -> serde_json::Value {
     let active = state.active_name();
     let bstate = state.backend.state();
     // Router: every profile under its composite id. Non-router: only the
     // active profile, under its composite id — the single model this proxy
-    // exposes (the client always sees the proxy's id, never the backend's).
+    // exposes. The advertised id is always the configured model_id: stable
+    // for clients no matter what the backend reports (the proxy translates
+    // it before relaying).
     let entries: Vec<(String, Profile, bool)> = if state.router {
         let mut keys: Vec<&String> = state.config.profiles.keys().collect();
         keys.sort();
-        keys.into_iter()
-            .map(|k| {
-                (
-                    composite_id(k, &state.config.profiles[k]),
-                    state.config.profiles[k].clone(),
-                    k == &active,
-                )
-            })
+        keys
+            .into_iter()
+            .map(|k| (k.to_string(), state.config.profiles[k].clone(), k == &active))
             .collect()
     } else {
-        let p = state.active_profile();
-        vec![(composite_id(&active, &p), p, true)]
+        vec![(state.active_name(), state.active_profile(), true)]
     };
     let data = entries
         .into_iter()
-        .map(|(id, p, is_active)| {
+        .map(|(k, p, is_active)| {
             let value = match (is_active, bstate) {
                 (true, BackendState::Ready) => "loaded",
                 (true, BackendState::Loading | BackendState::Unloading) => "loading",
@@ -331,7 +392,7 @@ fn all_models(state: &Arc<AppState>) -> serde_json::Value {
                 vec![]
             };
             serde_json::json!({
-                "id": id,
+                "id": composite_id(&k, &p),
                 "object": "model",
                 "owned_by": "llm_proxy",
                 "architecture": {
@@ -386,7 +447,7 @@ async fn route_chat(
     path: &str,
     profile: Profile,
     req: Request<Body>,
-) -> Result<(Profile, Request<Body>, Option<String>), (StatusCode, String)> {
+) -> Result<(Profile, Request<Body>, Option<(String, String)>), (StatusCode, String)> {
     if m != "POST" || (path != "/chat/completions" && path != "/v1/chat/completions") {
         return Ok((profile, req, None));
     }
@@ -418,7 +479,7 @@ async fn route_chat(
     // through untouched to the active profile (the backend answers with its
     // own "model not found").
     if state.router {
-        let Some((key, target)) = profile_by_composite(state, &model) else {
+        let Some((key, target)) = profile_by_composite(state, &model).await else {
             return Ok((
                 profile,
                 rebuild(serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec())),
@@ -434,7 +495,7 @@ async fn route_chat(
         return Ok((
             target,
             rebuild(serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec())),
-            Some(model),
+            Some((key, model)),
         ));
     }
     // Non-router: the proxy exposes exactly one model — the active profile's
@@ -453,8 +514,28 @@ async fn route_chat(
     Ok((
         target,
         rebuild(serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec())),
-        Some(model),
+        Some((key, model)),
     ))
+}
+
+/// Chat body: set the `model` field to `id` (no-op when the body is not
+/// JSON or carries no `model`).
+async fn set_chat_model(req: Request<Body>, id: &str) -> Request<Body> {
+    let uri = req.uri().clone();
+    let headers = req.headers().clone();
+    let Ok(body) = axum::body::to_bytes(req.into_body(), 100 * 1024 * 1024).await else {
+        return Request::new(axum::body::Body::empty());
+    };
+    let mut v: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("model".into(), serde_json::Value::String(id.to_string()));
+    }
+    let out = serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec());
+    let mut r = Request::new(axum::body::Body::from(out));
+    *r.method_mut() = axum::http::Method::POST;
+    *r.uri_mut() = uri;
+    *r.headers_mut() = headers;
+    r
 }
 
 /// Record an instant (proxy-level) request in the stats feed.
@@ -562,15 +643,19 @@ pub async fn run_proxy(
         // a composite `model` id to the matching profile (rewriting it to the
         // bare id before the relay); non-router mode accepts only the active
         // profile's composite id (bare id → 404).
-        let (profile, req, client_model) =
+        let (profile, mut req, client_model) =
             route_chat(&state, &m, &path, state.active_profile(), req).await?;
-        // Router: a warm /props?model=<composite of the active profile> is
-        // rewritten to the bare id (the backend never sees the composite).
-        if m == "GET" && path == "/props" {
+        // A warm /props?model=<composite of the active profile> is
+        // rewritten to the bare id the backend actually uses (the backend
+        // never sees the composite).
+        if m == "GET" && path == "/props" && state.backend.state() == BackendState::Ready {
             if let Some(model) = query.as_deref().and_then(query_model) {
-                if let Some((key, target)) = profile_by_composite(&state, &model) {
+                if let Some((key, target)) = profile_by_composite(&state, &model).await {
                     if key == state.active_name() {
-                        query = Some(format!("?model={}", target.model_id()));
+                        let eff = effective_model_id(&state, &key, &target).await;
+                        if !eff.is_empty() {
+                            query = Some(format!("?model={eff}"));
+                        }
                     }
                 }
             }
@@ -587,7 +672,7 @@ pub async fn run_proxy(
         // Same fields pi expects from a backend.
         if m == "GET" && (path == "/v1/models" || path == "/models") {
             trace_cold(&state, &m, &path, 200, true);
-            return Ok(json_ok(all_models(&state)));
+            return Ok(json_ok(all_models(&state).await));
         }
 
         // /props?model=<id> — model status. pi maps the error field in the
@@ -596,12 +681,13 @@ pub async fn run_proxy(
         if m == "GET" && path == "/props" && model_query && bstate != BackendState::Ready {
             // Router: a composite id naming a non-active profile is not
             // loaded here — pi answers by POST /models/load (which switches).
-            let not_active = query
-                .as_deref()
-                .and_then(query_model)
-                .and_then(|model| profile_by_composite(&state, &model))
-                .map(|(k, _)| k != state.active_name())
-                .unwrap_or(false);
+            let not_active = match query.as_deref().and_then(query_model) {
+                Some(model) => profile_by_composite(&state, &model)
+                    .await
+                    .map(|(k, _)| k != state.active_name())
+                    .unwrap_or(false),
+                None => false,
+            };
             let (code, msg) = if not_active {
                 (400, "model is not loaded")
             } else {
@@ -652,7 +738,7 @@ pub async fn run_proxy(
             // switches — it only loads the active profile.
             if let Some(model) = model_param {
                 if state.router {
-                    if let Some((key, target)) = profile_by_composite(&state, &model) {
+                    if let Some((key, target)) = profile_by_composite(&state, &model).await {
                         switch_to(&state, &key, &target).await;
                     }
                 }
@@ -672,19 +758,20 @@ pub async fn run_proxy(
             // Always reply for /models/load: the body is consumed above, so
             // we cannot fall through to the chat relay. pi polls /props until loaded.
             trace_cold(&state, &m, &path, 200, true);
-            return Ok(json_ok(all_models(&state)));
+            return Ok(json_ok(all_models(&state).await));
         }
 
         // POST /models/unload — stop the backend in the background, reply now.
         // Router: a composite model param naming a non-active profile is a
         // no-op (nothing of it is loaded here).
         if m == "POST" && path == "/models/unload" {
-            let other_profile = query
-                .as_deref()
-                .and_then(query_model)
-                .and_then(|model| profile_by_composite(&state, &model))
-                .map(|(k, _)| k != state.active_name())
-                .unwrap_or(false);
+            let other_profile = match query.as_deref().and_then(query_model) {
+                Some(model) => profile_by_composite(&state, &model)
+                    .await
+                    .map(|(k, _)| k != state.active_name())
+                    .unwrap_or(false),
+                None => false,
+            };
             if other_profile || bstate != BackendState::Stopped {
                 if !other_profile {
                     let be = state.backend.clone();
@@ -693,7 +780,7 @@ pub async fn run_proxy(
                     });
                 }
                 trace_cold(&state, &m, &path, 200, true);
-                return Ok(json_ok(all_models(&state)));
+                return Ok(json_ok(all_models(&state).await));
             }
         }
 
@@ -729,7 +816,18 @@ pub async fn run_proxy(
             return Err((StatusCode::SERVICE_UNAVAILABLE, e.to_string()));
         }
 
-        relay(&state, &m, &path, target, req, client_model.as_deref()).await
+        // Chat: point `model` at the bare id the backend actually uses —
+        // client-facing model id: the body's `model` was the client's
+        // composite id — rewrite it to the id the backend itself reports
+        // (effective_model_id translates when they differ).
+        if let Some((key, _)) = &client_model {
+            let eff = effective_model_id(&state, key, &profile).await;
+            if !eff.is_empty() && eff != profile.model_id() {
+                req = set_chat_model(req, &eff).await;
+            }
+        }
+
+        relay(&state, &m, &path, target, req, client_model.as_ref().map(|t| t.1.as_str())).await
         }
         else {
             let target = format!(
@@ -740,7 +838,16 @@ pub async fn run_proxy(
                 query.unwrap_or_default()
             );
             state.stats.request_started(&m, &path);
-            relay(&state, &m, &path, target, req, None).await
+            // Chat: same model-id fallback as the managed path — an
+            // external backend the proxy does not spawn still reports its
+            // own id via /v1/models.
+            if let Some((key, _)) = &client_model {
+                let eff = effective_model_id(&state, key, &profile).await;
+                if !eff.is_empty() && eff != profile.model_id() {
+                    req = set_chat_model(req, &eff).await;
+                }
+            }
+            relay(&state, &m, &path, target, req, client_model.as_ref().map(|t| t.1.as_str())).await
         }
     }
 

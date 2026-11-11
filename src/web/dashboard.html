@@ -191,7 +191,7 @@ table thead th {
 .insp-head button:hover { color: var(--text); border-color: var(--muted); }
 .empty { color: var(--muted); font-size: 13px; padding: 12px 8px; }
 footer {
-  display: flex; justify-content: flex-start; gap: 12px; flex-wrap: wrap; color: var(--muted);
+  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--muted);
   font-size: 12px; margin-top: 26px; border-top: 1px solid var(--border); padding-top: 12px;
 }
 footer a { color: var(--accent); text-decoration: none; }
@@ -499,7 +499,7 @@ footer a:hover { text-decoration: underline; }
           <thead>
             <tr>
               <th>time</th><th>method</th><th>path</th>
-              <th class="num">status</th><th class="num">tokens</th><th class="num">ms</th>
+              <th class="num">status</th><th class="num">tokens</th><th class="num">dur</th>
             </tr>
           </thead>
           <tbody id="reqs-body"></tbody>
@@ -512,6 +512,7 @@ footer a:hover { text-decoration: underline; }
 
   <footer>
     <span>© 2026 Domenico Giuffrida (domg73). <a href="#" id="lic-open">MIT license</a></span>
+    <span><a href="https://github.com/domg73/llm_proxy" target="_blank" rel="noopener">github</a></span>
   </footer>
 </main>
 

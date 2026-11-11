@@ -15,8 +15,11 @@ pub struct ProxyConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
-    /// Model ID as reported by the backend /v1/models (required: the
-    /// proxy advertises it in /v1/models as "<profile key>/<model_id>").
+    /// Model ID exposed to clients (required): it forms the composite id
+    /// `<profile>/<model_id>` that the proxy advertises in /v1/models and
+    /// the harness always addresses the model by it. If the backend
+    /// reports a different id in its own /v1/models, the proxy translates
+    /// to it before relaying — clients never notice.
     #[serde(default)]
     pub model_id: String,
 /// Path to the backend executable (llama-server.exe or ninfer*.exe).
@@ -183,11 +186,6 @@ impl Config {
         let active = cfg.active_profile.as_deref().ok_or_else(|| {
             anyhow!("missing `active_profile` (bridge mode uses `remote` instead)")
         })?;
-        for (key, p) in &cfg.profiles {
-            if p.model_id.trim().is_empty() {
-                bail!("profile '{}': model_id is empty (required)", key);
-            }
-        }
         if !cfg.profiles.contains_key(active) {
             bail!(
                 "active_profile '{}' not found in profiles ({})",
@@ -196,6 +194,12 @@ impl Config {
             );
         }
         for (name, p) in &cfg.profiles {
+            // Clients address the model by this id, so it must be set:
+            // the proxy advertises it and translates it to the backend's
+            // own id (if different) before relaying.
+            if p.model_id.trim().is_empty() {
+                bail!("profile '{}': model_id is empty (required — clients address the model by it)", name);
+            }
             if p.backend_port() == cfg.proxy.stats_port {
                 bail!("stats_port {} collides with backend port of profile '{}'", cfg.proxy.stats_port, name);
             }

@@ -96,7 +96,7 @@ Each `[profiles.<id>]` describes one backend:
 | `exe` | Backend executable. Declared in a **managed** profile (the proxy spawns it; both targets). Omit it for an external backend (e.g. Linux profile with only `backend_host`/`backend_port`). |
 | `workdir` | Backend working directory (relative model paths resolve here). |
 | `args` | CLI arguments in order (typically: model path, `--port`, …). The backend address is derived from `--host`/`--port` when `backend_host`/`backend_port` are not set. |
-| `model_id` | Model id reported to clients (required). It is embedded in the composite id `<profile>/<model_id>` that `/v1/models` advertises — in `--router` mode for every profile, otherwise for the active one only. |
+| `model_id` | **Required.** The id clients see: it forms the composite id `<profile>/<model_id>` that `/v1/models` advertises (in `--router` mode for every profile, otherwise for the active one only), and the harness always addresses the model by it. If the backend reports a different id in its own `/v1/models`, the proxy translates to the backend's id before relaying — clients never notice. |
 | `context_length` | Advertised context window (served in `/v1/models` while cold). Keep in sync with the backend's `--max-context`. |
 | `vision` | Model is vision-capable (advertised input modalities). Keep in sync with the backend's `--vision` flag. |
 | `health` | Health-check URL (default: `http://<backend_host>:<backend_port>/health`). |

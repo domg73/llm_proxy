@@ -374,6 +374,7 @@ pub async fn run_app() -> anyhow::Result<()> {
         sysmon: sysmon_snap.clone(),
         remote_stats: std::sync::Arc::new(std::sync::Mutex::new(None)),
         metric_hist: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+        model_ids: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         #[cfg(windows)]
         admin_tx: action_tx.clone(),
     });
