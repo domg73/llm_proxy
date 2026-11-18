@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.2 — 2026-11-18
+
+- **Tray**: new *Open log* menu entry — opens the log file (shown when a log file exists, e.g. in silent mode).
+- **Dashboard**: the footer GitHub link now shows text + logo (theme-adaptive).
+
 ## v1.0.1 — 2026-11-11
 
 - **`model_id` is now required and acts as an override**: it is the model id clients use — the proxy advertises the composite id `<profile>/<model_id>` in `/v1/models`, and the harness always addresses the model by it. Behind the scenes the proxy talks to the backend with the backend's *own* id: if the configured id is not in the backend's `/v1/models` list, the proxy resolves the real id (logged once, cached per profile for the process lifetime) and rewrites every request accordingly. A wrong `model_id` in the toml no longer breaks the proxy — it must just be non-empty.
