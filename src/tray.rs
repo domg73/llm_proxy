@@ -74,6 +74,7 @@ pub enum Action {
     RemoteLoadProfile(String),
     RemoteStop,
     OpenStats,
+    OpenLog,
     Restart,
     Quit,
 }
@@ -85,6 +86,7 @@ enum TrayAction {
     RemoteLoadProfile(String),
     RemoteStop,
     OpenStats,
+    OpenLog,
     Restart,
     Quit,
 }
@@ -96,6 +98,7 @@ fn action_label(a: &TrayAction) -> String {
         TrayAction::RemoteLoadProfile(n) => format!("RemoteLoadProfile({n})"),
         TrayAction::RemoteStop => "RemoteStop".into(),
         TrayAction::OpenStats => "OpenStats".into(),
+        TrayAction::OpenLog => "OpenLog".into(),
         TrayAction::Restart => "Restart".into(),
         TrayAction::Quit => "Quit".into(),
     }
@@ -108,6 +111,7 @@ fn action_to(a: &TrayAction) -> Action {
         TrayAction::RemoteLoadProfile(n) => Action::RemoteLoadProfile(n.clone()),
         TrayAction::RemoteStop => Action::RemoteStop,
         TrayAction::OpenStats => Action::OpenStats,
+        TrayAction::OpenLog => Action::OpenLog,
         TrayAction::Restart => Action::Restart,
         TrayAction::Quit => Action::Quit,
     }
@@ -162,6 +166,9 @@ struct TrayData {
     /// mirrored from the remote /api/stats feed (set_remote_profiles).
     remote_profiles: Mutex<Vec<(String, String)>>,
     has_stats: bool,
+    /// True when a log file exists (silent mode, or a previous run created
+    /// one) — controls the "Open log" menu entry.
+    has_log: bool,
     router: bool,
     hwnd: AtomicPtr<core::ffi::c_void>,
 }
@@ -253,6 +260,9 @@ impl TrayData {
                 ordered.push((label, action));
                 if is_stop && self.has_stats {
                     ordered.push(("Open stats".to_string(), TrayAction::OpenStats));
+                }
+                if is_stop && self.has_log {
+                    ordered.push(("Open log".to_string(), TrayAction::OpenLog));
                 }
             }
             ordered.push(("Restart proxy".to_string(), TrayAction::Restart));
@@ -491,6 +501,7 @@ pub struct Tray {
     profile_names: Vec<String>,
     active: String,
     has_stats: bool,
+    has_log: bool,
     proxy_addr: String,
     stats_addr: String,
     router: bool,
@@ -504,11 +515,13 @@ impl Tray {
         proxy_addr: &str,
         stats_addr: &str,
         router: bool,
+        has_log: bool,
     ) -> Self {
         Self {
             profile_names,
             active: active.to_string(),
             has_stats,
+            has_log,
             proxy_addr: proxy_addr.to_string(),
             stats_addr: stats_addr.to_string(),
             router,
@@ -599,10 +612,14 @@ impl Tray {
             for (label, action) in [
                 ("Stop backend", TrayAction::Stop),
                 ("Open stats", TrayAction::OpenStats),
+                ("Open log", TrayAction::OpenLog),
                 ("Restart proxy", TrayAction::Restart),
                 ("Exit", TrayAction::Quit),
             ] {
                 if label == "Open stats" && !self.has_stats {
+                    continue;
+                }
+                if label == "Open log" && !self.has_log {
                     continue;
                 }
                 // Router mode keeps "Stop backend" (frees VRAM); only the
@@ -637,6 +654,7 @@ impl Tray {
                 profile_names: self.profile_names.clone(),
                 remote_profiles: Mutex::new(Vec::new()),
                 has_stats: self.has_stats,
+                has_log: self.has_log,
                 router: self.router,
                 hwnd: AtomicPtr::new(hwnd.0 as *mut _),
             });

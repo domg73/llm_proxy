@@ -516,6 +516,9 @@ pub async fn run_app() -> anyhow::Result<()> {
     #[cfg(windows)]
     let tray_stats_addr = stats_display_addr.clone();
     #[cfg(windows)]
+    let tray_has_log = matches!(mode, Mode::Silent)
+        || log_path().map(|p| p.exists()).unwrap_or(false);
+    #[cfg(windows)]
     std::thread::spawn(move || {
         let t = tray::Tray::new(
             profile_names,
@@ -524,6 +527,7 @@ pub async fn run_app() -> anyhow::Result<()> {
             &tray_proxy_addr,
             &tray_stats_addr,
             router,
+            tray_has_log,
         );
         if let Err(e) = t.run(action_tx) {
             error!(err = %e, "tray thread failed");
@@ -639,6 +643,13 @@ pub async fn run_app() -> anyhow::Result<()> {
                     Some(t) if !t.is_empty() => format!("http://{stats_display_addr}?t={t}"),
                     _ => format!("http://{stats_display_addr}"),
                 });
+            }
+            Ok(tray::Action::OpenLog) => {
+                info!("open log file requested");
+                if let Some(p) = log_path() {
+                    // ShellExecute "open" on a path: default app for .log.
+                    open_url(&p.to_string_lossy());
+                }
             }
             Ok(tray::Action::Restart) => {
                 info!("restart requested");
