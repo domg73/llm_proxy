@@ -10,8 +10,6 @@ Run (from the project root):
 
 Output:
   dist\llm_proxy.exe
-  dist\llm_proxy.toml   (from llm_proxy_dist.toml)
-
 Notes:
   - The exe embeds the icon + version resource (resource.rc -> resource.res):
     no path-privacy remap.
@@ -67,15 +65,9 @@ if ($editbin) {
     Write-Warning 'editbin not found - skipping SUBSYSTEM:WINDOWS (the exe will open a console).'
 }
 
-# --- 6) Copy to dist (+ the distribution toml) ---
+# --- 6) Copy to dist ---
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 Copy-Item -Force $exe (Join-Path $dist 'llm_proxy.exe')
-$distToml = Join-Path $root 'llm_proxy_dist.toml'
-if (Test-Path $distToml) {
-    Copy-Item -Force $distToml (Join-Path $dist 'llm_proxy.toml')
-} else {
-    Write-Warning 'llm_proxy_dist.toml not found - skipping dist\llm_proxy.toml.'
-}
 
 Write-Host "Built: $dist\llm_proxy.exe"
