@@ -1,4 +1,4 @@
-// PE resources for llm_proxy.exe (compiled by build_windows.ps1 with rc.exe):
+// PE resources for llm_proxy.exe (compiled by build.bat with rc.exe):
 //   - file icon (assets\llm_proxy.ico, path relative to project root)
 //   - version info: the "Details" tab in exe Properties (bump the four
 //     version tuples below on release).
@@ -21,12 +21,12 @@ BEGIN
     BEGIN
       VALUE "CompanyName",      "domg73"
       VALUE "FileDescription",  "llm_proxy - local OpenAI-compatible proxy for local LLM inference"
-      VALUE "FileVersion",      "1.0.0.0"
+      VALUE "FileVersion",      "1.0.3.0"
       VALUE "InternalName",     "llm_proxy"
       VALUE "LegalCopyright",   "Copyright (C) 2026 domg73"
       VALUE "OriginalFilename", "llm_proxy.exe"
       VALUE "ProductName",      "llm_proxy"
-      VALUE "ProductVersion",   "1.0.0.0"
+      VALUE "ProductVersion",   "1.0.3.0"
     END
   END
   BLOCK "VarFileInfo"
