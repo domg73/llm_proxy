@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.3 — 2026-11-19
+
+- **New: backend-log card in the dashboard** — a collapsible card in the backend panel streams the backend process's stdout/stderr live (2 s cursor-based polling; in bridge mode the endpoint is forwarded to the remote proxy). It auto-follows the tail until you scroll up, resumes when you return to the bottom, and auto-opens when a backend load fails — exactly when that output is needed. A "…" handle at the card's bottom center drag-resizes it (height remembered per panel); *Clear* empties the view.
+- **New: `GET /api/backend-log`** — backend stdout/stderr is always captured into a rolling ring buffer (even in silent mode; console mode still prints to the terminal as before) and served through this endpoint.
+- **Tray**: "Open log" renamed to "Open proxy log" to disambiguate from the new backend-log card.
+- **Dashboard**: unified button sizing across all controls (the chat input row keeps its own style); the chat follows the tail while streaming and no longer pulls you back to the bottom if you scrolled up to read (a new turn always jumps to it); fixed the dashboard page bouncing/scrolling when log lines append (overflow-anchor).
+
 ## v1.0.2 — 2026-11-18
 
 - **Tray**: new *Open log* menu entry — opens the log file (shown when a log file exists, e.g. in silent mode).

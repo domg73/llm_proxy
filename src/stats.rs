@@ -53,6 +53,64 @@ pub struct ReqDetail {
 
 const MAX_RECENT: usize = 100;
 
+/// One backend stdout/stderr line kept in the ring buffer.
+#[derive(Clone)]
+pub struct LogLine {
+    /// Monotonic sequence number (assigned on push, never reused).
+    pub seq: u64,
+    pub text: String,
+}
+
+/// Rolling ring of the last 1000 backend stdout/stderr lines, published
+/// to the dashboard (GET /api/backend-log). Lines are pushed by the
+/// reader threads (backend.rs) and survive backend stop — a failed load
+/// leaves its output readable.
+pub struct BackendLog {
+    inner: std::sync::Mutex<InnerLog>,
+}
+
+const MAX_BACKEND_LOG: usize = 1000;
+
+#[derive(Default)]
+struct InnerLog {
+    seq: u64,
+    lines: VecDeque<LogLine>,
+}
+
+impl BackendLog {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: std::sync::Mutex::new(InnerLog::default()),
+        })
+    }
+
+    /// Push one line (reader thread, std context). Trims the ring.
+    pub fn push(&self, text: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.seq += 1;
+        let line = LogLine {
+            seq: inner.seq,
+            text: text.to_string(),
+        };
+        if inner.lines.len() >= MAX_BACKEND_LOG {
+            inner.lines.pop_front();
+        }
+        inner.lines.push_back(line);
+    }
+
+    /// Lines with seq > `since`, plus the newest seq (the next cursor).
+    pub fn tail(&self, since: u64) -> (Vec<LogLine>, u64) {
+        let inner = self.inner.lock().unwrap();
+        let lines: Vec<LogLine> = inner
+            .lines
+            .iter()
+            .filter(|l| l.seq > since)
+            .cloned()
+            .collect();
+        (lines, inner.seq)
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     requests: u64,

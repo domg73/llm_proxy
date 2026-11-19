@@ -126,8 +126,7 @@ header .spacer { flex: 1; }
 .gnum { font-family: var(--mono); font-size: clamp(12px, 1.05vw, 15px); font-weight: 650; margin-top: 2px; }
 /* multi-GPU: single card, ‹ › pager in the corner (hidden with 1 GPU) */
 .gpu-label { display: flex; align-items: center; gap: 5px; }
-.gpu-pager { background: none; border: none; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; padding: 1px 5px; border-radius: 4px; font-family: var(--mono); }
-.gpu-pager:hover { color: var(--text); }
+
 .sys-bars { margin-top: 12px; }
 .ram-row { display: flex; align-items: center; gap: 12px; }
 .ram-row .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
@@ -183,12 +182,7 @@ table thead th {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 4px;
 }
-.insp-head button {
-  background: none; border: 1px solid var(--border); color: var(--muted);
-  border-radius: 6px; width: 22px; height: 22px; cursor: pointer;
-  font-size: 14px; line-height: 1;
-}
-.insp-head button:hover { color: var(--text); border-color: var(--muted); }
+
 .empty { color: var(--muted); font-size: 13px; padding: 12px 8px; }
 footer {
   display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--muted);
@@ -224,13 +218,8 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
   background: rgba(61, 220, 132, .12); border: 1px solid rgba(61, 220, 132, .4);
   color: var(--green); font: 700 11px var(--mono); letter-spacing: .5px;
 }
-.lic-x {
-  margin-left: auto; width: 30px; height: 30px; cursor: pointer;
-  background: none; border: 1px solid var(--border); border-radius: 8px;
-  color: var(--muted); font: 600 14px var(--mono); line-height: 1;
-  transition: color .2s, border-color .2s;
-}
-.lic-x:hover { color: var(--text); border-color: var(--accent); }
+.lic-x { margin-left: auto; }
+.lic-x.btn:hover { color: var(--text); border-color: var(--accent); }
 .lic-body { padding: 20px 22px; overflow-y: auto; font: 400 13px/1.8 var(--mono); color: var(--muted); }
 .lic-body p { margin: 0 0 14px; }
 .lic-body p:last-child { margin-bottom: 0; }
@@ -245,22 +234,68 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
 .lic-foot a:hover { text-decoration: underline; }
 /* chat — collapsible card between the backend banner and the KPI strip */
 .chat-card { margin: 0 0 16px; }
+/* backend log — collapsible card above the chat card */
+/* the backend card hosts the collapsible backend-log section */
+.be-head { display: flex; align-items: center; gap: 8px; }
+.be-head .label { margin: 0; }
+.be-head .tag { color: var(--muted); font-size: 12px; }
+.be-head .spacer { flex: 1; }
+/* One button metric for the whole dashboard: every button shares the
+   same height, padding, font and radius. .btn-solid = filled variant,
+   .btn-square = fixed-size icon buttons. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 24px; padding: 0 10px;
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 6px; cursor: pointer;
+  font-family: inherit; font-size: 12px; line-height: 1;
+}
+.btn:hover { color: var(--text); border-color: var(--muted); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn-solid { background: var(--bubble-user); color: var(--text); }
+.btn-square { width: 24px; padding: 0; font-size: 13px; }
+#be-log-body {
+  display: none; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.be-card.open #be-log-body { display: block; }
+/* clear lives in the log footer, not the head (the head stays symmetric
+   with the chat head: label … spacer … toggle). The resize bar spans the
+   card bottom, just above the card edge. */
+.be-log-foot {
+  display: flex; align-items: center; margin-top: 6px;
+}
+
+/* full-width drag bar at the card bottom (chat / backend log). Only the
+   centered "…" handle is interactive (cursor + hover); the bar centers it. */
+.dragbar {
+  height: 14px; margin-top: 4px;
+  display: flex; align-items: center; justify-content: center;
+}
+.drag-grip {
+  cursor: ns-resize; color: var(--muted);
+  font-size: 14px; line-height: 1;
+  padding: 0 5px;
+  user-select: none;
+}
+.drag-grip:hover { color: var(--text); }
+.be-log {
+  height: 340px; min-height: 120px; overflow-y: auto; overflow-anchor: none; padding: 10px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+}
 .chat-head { display: flex; align-items: center; gap: 8px; }
 .chat-head .label { margin: 0; }
 .chat-head .tag { color: var(--muted); font-size: 12px; }
 .chat-head .spacer { flex: 1; }
-.chat-head button {
-  background: none; border: 1px solid var(--border); color: var(--muted);
-  border-radius: 6px; width: 24px; height: 24px; cursor: pointer;
-  font-size: 13px; line-height: 1;
-}
-.chat-head button:hover { color: var(--text); border-color: var(--muted); }
+
 #chat-body { display: none; }
 .chat-card.open #chat-body { display: block; }
 .chat-log {
-  height: 340px; overflow-y: auto; padding: 10px;
-  display: flex; flex-direction: column; gap: 8px; margin-top: 10px;
+  height: 340px; min-height: 120px; overflow-y: auto; overflow-anchor: none; padding: 10px;
+  display: flex; flex-direction: column; gap: 8px;
 }
+/* card footer: full-width drag bar (see .dragbar) */
 .chat-msg {
   max-width: 82%; padding: 6px 10px; border-radius: 8px;
   white-space: pre-wrap; word-break: break-word; font-size: 13px;
@@ -334,6 +369,7 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
 }
 .chat-input-row button:hover { border-color: var(--muted); }
 .chat-input-row button:disabled { opacity: .5; cursor: default; }
+
 .mono { font-family: var(--mono); font-size: 12.5px; }
 /* profile switcher in the backend card (dropdown + stop) */
 .be-select {
@@ -343,12 +379,7 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
 }
 .be-select:focus { outline: none; border-color: var(--accent); }
 .be-select:disabled { opacity: .5; cursor: default; }
-.be-stop {
-  background: var(--bubble-user); color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 12.5px;
-}
-.be-stop:hover { border-color: var(--muted); }
-.be-stop:disabled { opacity: .5; cursor: default; }
+
 .be-note { color: var(--red); font-size: 12px; margin-top: 6px; }
 </style>
 <script>
@@ -404,25 +435,37 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
 
   <div class="offline" id="offline">connection to llm_proxy lost — retrying…</div>
 
-  <div class="card be-card">
-    <div class="label">backend</div>
+  <div class="card be-card" id="be-card">
+    <div class="be-head">
+      <span class="label">backend</span>
+      <span class="tag" id="be-log-tag" style="display:none"></span>
+      <span class="spacer"></span>
+      <button class="btn btn-square" id="be-log-toggle" title="show/hide the backend log">▸</button>
+    </div>
     <div class="value" style="display:flex;align-items:center;gap:10px">
       <span class="pill stopped" id="be-state">stopped</span>
       <span style="font-size:15px" class="mono" id="be-model">—</span>
       <span class="spacer"></span>
       <span class="pill router" id="be-router-badge" hidden title="router mode — model is selected by the client">router mode</span>
       <select id="be-profile" class="be-select" hidden title="switch profile"></select>
-      <button id="be-stop" class="be-stop" hidden title="load / stop the backend">load</button>
+      <button id="be-stop" class="btn btn-solid" hidden title="load / stop the backend">load</button>
     </div>
     <div class="sub" id="be-sub">— · —:— · profile — · pid —</div>
     <div class="be-note" id="be-admin-note" hidden></div>
+    <div id="be-log-body">
+      <div class="be-log" id="be-log"></div>
+      <div class="be-log-foot">
+        <button class="btn" id="be-log-clear" title="clear the displayed log">clear</button>
+      </div>
+      <div class="dragbar"><span id="be-log-drag" class="drag-grip" title="drag to resize">…</span></div>
+    </div>
   </div>
   <div class="card chat-card" id="chat-card">
     <div class="chat-head">
       <span class="label">chat</span>
       <span class="tag" id="chat-queue" style="display:none"></span>
       <span class="spacer"></span>
-      <button id="chat-toggle" title="show/hide chat">▸</button>
+      <button class="btn btn-square" id="chat-toggle" title="show/hide chat">▸</button>
     </div>
     <div id="chat-body">
       <div class="chat-log" id="chat-log"></div>
@@ -432,10 +475,11 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
         <input type="file" id="chat-file" multiple style="display:none"
                accept="image/*,.txt,.md,.log,.csv,.json,.xml,.yml,.yaml,.toml,.ini,.py,.js,.ts,.rs,.c,.cpp,.h,.java,.go,.sh,.html,.css,.sql">
         <input id="chat-input" type="text" placeholder="message… (Enter to send)" autocomplete="off">
-        <button id="chat-send">send</button>
-        <button id="chat-stop" style="display:none">stop</button>
-        <button id="chat-new" title="clear the conversation">new</button>
+<button id="chat-send">send</button>
+<button id="chat-stop" style="display:none">stop</button>
+<button id="chat-new" title="clear the conversation">new</button>
       </div>
+      <div class="dragbar"><span id="chat-drag" class="drag-grip" title="drag to resize">…</span></div>
     </div>
   </div>
   <div class="kpis">
@@ -523,7 +567,7 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
   <div class="lic-modal" role="dialog" aria-modal="true">
     <div class="lic-head">
       <span class="lic-badge">MIT</span>
-      <button class="lic-x" id="lic-close" type="button" aria-label="Close">✕</button>
+      <button class="lic-x btn btn-square" id="lic-close" type="button" aria-label="Close">✕</button>
     </div>
     <div class="lic-body">
       <p class="lic-title">MIT License</p>
@@ -823,6 +867,12 @@ function render(d) {
   const pill = $("#be-state");
   pill.textContent = be.state;
   pill.className = "pill " + be.state;
+  // backend log card: a failed load (loading -> stopped) auto-opens it —
+  // the output is exactly what you need in that situation. External
+  // profiles have no proxy-side log.
+  if (prevBeState === "loading" && be.state === "stopped") beLogSetOpen(true, false);
+  prevBeState = be.state;
+  beLogTag(be.state === "external" ? "n/a (external)" : "");
   $("#be-model").textContent = d.profile.model_id;
   $("#be-sub").textContent =
     (d.profile.backend_exe || "backend") + " · " + (d.profile.backend_host || "127.0.0.1") + ":" + d.profile.backend_port +
@@ -897,8 +947,8 @@ function render(d) {
       ' <span class="tag gpu-power" style="text-transform:none"></span>' +
       '<span style="flex:1"></span>' +
       '<span class="tag gpu-count" style="text-transform:none;display:none"></span>' +
-      '<button class="gpu-pager" title="GPU precedente" hidden>‹</button>' +
-      '<button class="gpu-pager" title="GPU successiva" hidden>›</button></div>' +
+      '<button class="gpu-pager btn btn-square" title="GPU precedente" hidden>‹</button>' +
+      '<button class="gpu-pager btn btn-square" title="GPU successiva" hidden>›</button></div>' +
       '<div class="gauges">' +
       '<div class="gauge">' + gaugeSvg +
       '<div class="glabel">gpu</div><div class="gnum">—</div></div>' +
@@ -1123,7 +1173,7 @@ function renderInspector(recent) {
   ];
   el.innerHTML =
     '<div class="insp-head"><span class="label">request details <span class="tag">· click the row again to close</span></span>' +
-    '<button id="insp-close" title="close">×</button></div>' +
+    '<button class="btn btn-square" id="insp-close" title="close">×</button></div>' +
     '<div class="mono" style="padding:5px 8px 0;font-size:12.5px;color:var(--muted)">' +
     "#" + r.id + " · " + esc(r.method) + " " + esc(r.path) + " · " + r.status + "</div>" +
     rows
@@ -1260,7 +1310,7 @@ function chatBubble(cls, text) {
   el.className = "chat-msg " + cls;
   el.textContent = text;
   chatLogEl.appendChild(el);
-  chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  if (chatStick) chatLogEl.scrollTop = chatLogEl.scrollHeight;
   return el;
 }
 // --- markdown rendering (marked -> DOMPurify -> fenced code boxes) ---
@@ -1375,7 +1425,7 @@ function chatMeta(text, copyText) {
     el.appendChild(cp);
   }
   chatLogEl.appendChild(el);
-  chatLogEl.scrollTop = chatLogEl.scrollHeight;
+  if (chatStick) chatLogEl.scrollTop = chatLogEl.scrollHeight;
 }
 function chatSetBusy(b) {
   chatInput.disabled = b;
@@ -1400,6 +1450,7 @@ async function chatSend() {
   const userContent = parts.length === 1 ? fullText : parts;
   chatMsgs.push({ role: "user", content: userContent });
   chatInput.value = "";
+  chatStick = true;
   const ub = chatBubble("user", text || "(see attachments)");
   chatAttach.forEach((a) => {
     if (a.kind === "image") {
@@ -1475,11 +1526,11 @@ async function chatSend() {
             requestAnimationFrame(() => {
               mdPending = false;
               renderMd(modelEl, content);
-              chatLogEl.scrollTop = chatLogEl.scrollHeight;
+              if (chatStick) chatLogEl.scrollTop = chatLogEl.scrollHeight;
             });
           }
         }
-        chatLogEl.scrollTop = chatLogEl.scrollHeight;
+        if (chatStick) chatLogEl.scrollTop = chatLogEl.scrollHeight;
       }
     }
     if (!content) modelEl.textContent = "(empty response)";
@@ -1514,6 +1565,12 @@ async function chatSend() {
 }
 
 const chatLogEl = $("#chat-log");
+// Follow the tail while the reader hasn't scrolled up; a new user turn
+// (chatSend) always jumps back to the bottom.
+let chatStick = true;
+chatLogEl.addEventListener("scroll", () => {
+  chatStick = chatLogEl.scrollHeight - chatLogEl.scrollTop - chatLogEl.clientHeight < 30;
+});
 const chatInput = $("#chat-input");
 function chatToggle() {
   const open = $("#chat-card").classList.toggle("open");
@@ -1533,8 +1590,107 @@ $("#chat-new").onclick = () => {
   if (chatAbort) return;
   chatMsgs = [];
   chatLogEl.innerHTML = "";
+  chatStick = true;
 };
 chatInput.onkeydown = (e) => { if (e.key === "Enter") chatSend(); };
+
+/* ---------- backend log card ---------- */
+let beLogOpen = localStorage.getItem("llmbe.log.open") === "1";
+let beLogCursor = 0;
+let beLogTimer = null;
+let prevBeState = null; // render() uses it: failed load auto-opens the card
+const beLogEl = $("#be-log");
+// Follow the tail while the reader hasn't scrolled up; "clear" and
+// re-opening the card always jump back to the bottom.
+let beLogStick = true;
+beLogEl.addEventListener("scroll", () => {
+  beLogStick = beLogEl.scrollHeight - beLogEl.scrollTop - beLogEl.clientHeight < 30;
+});
+
+function beLogTag(text) {
+  const t = $("#be-log-tag");
+  if (text) { t.textContent = text; t.style.display = ""; }
+  else t.style.display = "none";
+}
+
+// One cursor-based fetch: append lines newer than beLogCursor, keep the
+// DOM light, auto-scroll only when the reader is at the bottom.
+async function beLogTick() {
+  try {
+    const r = await fetch(authUrl("/api/backend-log?since=" + beLogCursor), { cache: "no-store" });
+    if (!r.ok) return;
+    const data = await r.json();
+    // Advance the cursor; if the proxy restarted (seq counter reset),
+    // re-catch-up from the start of the fresh ring.
+    if (typeof data.since === "number") {
+      beLogCursor = data.since < beLogCursor ? 0 : data.since;
+    }
+    const lines = data.lines || [];
+    const pre = document.getElementById("be-log");
+    for (const l of lines) {
+      // l is {seq, text} from the proxy.
+      const div = document.createElement("div");
+      div.textContent = l.text;
+      pre.appendChild(div);
+    }
+    while (pre.childElementCount > 500) pre.firstElementChild.remove();
+    // Follow the tail while beLogStick. `overflow-anchor: none` on the
+    // container keeps this scrollTop update from dragging the dashboard
+    // page scroll.
+    if (beLogStick) pre.scrollTop = pre.scrollHeight;
+  } catch (e) { /* offline tick — retried by the next one */ }
+}
+
+function beLogSetOpen(open, persist) {
+  beLogOpen = open;
+  $("#be-card").classList.toggle("open", open);
+  $("#be-log-toggle").textContent = open ? "▾" : "▸";
+  if (persist !== false) localStorage.setItem("llmbe.log.open", open ? "1" : "0");
+  if (open) {
+    beLogStick = true;
+    beLogTick();
+    if (!beLogTimer) beLogTimer = setInterval(beLogTick, 2000);
+  } else if (beLogTimer) {
+    clearInterval(beLogTimer);
+    beLogTimer = null;
+  }
+}
+
+$("#be-log-toggle").onclick = () => beLogSetOpen(!beLogOpen);
+$("#be-log-clear").onclick = () => { beLogEl.innerHTML = ""; beLogStick = true; };
+
+// Restore the persisted state (no fetch until the first tick below).
+if (beLogOpen) beLogSetOpen(true, false);
+
+/* Drag bar at each card's bottom (see .dragbar). It resizes the panel's
+   scroll area; the height is remembered per panel. */
+function makeGrip(gripId, targetId, key) {
+  const grip = document.getElementById(gripId);
+  const el = document.getElementById(targetId);
+  const saved = Number(localStorage.getItem(key) || 0);
+  if (saved >= 120) el.style.height = Math.min(saved, Math.floor(window.innerHeight * 0.95)) + "px";
+  let startY = 0, startH = 0;
+  grip.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    startY = e.clientY;
+    startH = el.getBoundingClientRect().height;
+    const move = (ev) => {
+      const h = Math.max(120, Math.min(startH + (ev.clientY - startY), Math.floor(window.innerHeight * 0.95)));
+      el.style.height = h + "px";
+    };
+    const up = () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      document.body.style.cursor = "";
+      localStorage.setItem(key, String(el.offsetHeight));
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+    document.body.style.cursor = "ns-resize";
+  });
+}
+makeGrip("be-log-drag", "be-log", "llmbe.log.height");
+makeGrip("chat-drag", "chat-log", "llmchat.height");
 
 setInterval(refresh, autoMs);
 refresh();

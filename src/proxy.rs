@@ -37,6 +37,10 @@ pub struct AppState {
     /// a profile that declares an `exe` is managed (spawn/stop/idle-unload);
     /// an external profile (no `exe`) never spawns — it sits in Stopped.
     pub backend: Arc<crate::backend::Backend>,
+    /// Rolling ring of the backend's stdout/stderr lines (dashboard card,
+    /// GET /api/backend-log). Pushed by the reader threads in backend.rs;
+    /// survives backend stop, so a failed load leaves its output readable.
+    pub backend_log: Arc<crate::stats::BackendLog>,
     pub client: reqwest::Client,
     pub stats: Arc<Stats>,
     /// Serializes backend state transitions (stop/spawn) so tray switches,
@@ -617,6 +621,18 @@ pub async fn run_proxy(
                 ),
                 _ => Ok(crate::web::api_admin_stop(State(state.clone())).await),
             };
+        }
+
+        // /api/backend-log — the backend's stdout/stderr ring (dashboard
+        // card). Served on the proxy port too, so a bridge instance can
+        // fetch it from the remote proxy.
+        if m == "GET" && path == "/api/backend-log" {
+            let raw = req.uri().query().unwrap_or("");
+            let since = raw
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("since=").and_then(|v| v.parse::<u64>().ok()))
+                .unwrap_or(0);
+            return Ok(crate::web::backend_log_response(&state, since).await);
         }
 
         // ---------- Bridge mode: everything else is relayed transparently

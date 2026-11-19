@@ -311,7 +311,8 @@ pub async fn run_app() -> anyhow::Result<()> {
             Some(std::sync::Arc::new(|l: String| tracing::debug!("[backend] {l}")))
         }
     };
-    let backend = backend::Backend::new(stats.clone(), client.clone(), sink);
+    let backend_log = crate::stats::BackendLog::new();
+    let backend = backend::Backend::new(stats.clone(), client.clone(), sink, backend_log.clone());
 
     let mut cfg = config::load_config()?;
     // `--remote <host:port>`: bridge mode — this instance relays to another
@@ -367,6 +368,7 @@ pub async fn run_app() -> anyhow::Result<()> {
         active: std::sync::Mutex::new(cfg.active_profile.clone().unwrap_or_default()),
         router,
         backend: backend.clone(),
+        backend_log,
         client,
         stats: stats.clone(),
         ops: std::sync::Arc::new(tokio::sync::Mutex::new(())),

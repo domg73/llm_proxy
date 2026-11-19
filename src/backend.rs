@@ -44,8 +44,9 @@ struct SendHandle(HANDLE);
 unsafe impl Send for SendHandle {}
 
 /// One backend stdout/stderr line, without the trailing newline.
-/// Console mode: sink prints it to the terminal. Silent mode: no sink,
-/// nothing is captured (keeps the log file small).
+/// Console mode: sink also prints it to the terminal. The line is ALWAYS
+/// pushed to the backend log ring (Backend.log) regardless of the sink —
+/// that is what the dashboard card reads.
 pub type LineSink = std::sync::Arc<dyn Fn(String) + Send + Sync>;
 
 pub struct Backend {
@@ -64,8 +65,11 @@ pub struct Backend {
     last_request: std::sync::Mutex<Instant>,
     pub stats: Arc<Stats>,
     pub client: reqwest::Client,
-    /// Where the backend's stdout/stderr lines go (see LineSink).
+    /// Where the backend's stdout/stderr lines ALSO go (see LineSink).
     sink: Option<LineSink>,
+    /// Rolling ring of backend stdout/stderr lines for the dashboard
+    /// (GET /api/backend-log). Always captured, even in silent mode.
+    log: Arc<crate::stats::BackendLog>,
 }
 
 const ST_STOPPED: u8 = 0;
@@ -74,7 +78,12 @@ const ST_READY: u8 = 2;
 const ST_UNLOADING: u8 = 3;
 
 impl Backend {
-    pub fn new(stats: Arc<Stats>, client: reqwest::Client, sink: Option<LineSink>) -> Arc<Self> {
+    pub fn new(
+        stats: Arc<Stats>,
+        client: reqwest::Client,
+        sink: Option<LineSink>,
+        log: Arc<crate::stats::BackendLog>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             child: Mutex::new(None),
             #[cfg(windows)]
@@ -85,6 +94,7 @@ impl Backend {
             stats,
             client,
             sink,
+            log,
         })
     }
 
@@ -149,36 +159,55 @@ impl Backend {
                 });
             }
         }
-        if self.sink.is_some() {
-            // Capture and stream to the configured sink (console or file).
-            cmd.stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-        } else {
-            // No sink: nothing captured.
-            cmd.stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-        }
+        // stdout/stderr are ALWAYS piped: every line goes to the rolling
+        // log ring (dashboard card) and, when present, to the LineSink
+        // (Windows console / Linux debug log). Capturing does not touch
+        // the proxy log file.
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
         info!(exe = %spec.exe, "starting backend");
         let mut c = cmd.spawn()?;
         let stats = self.stats.clone();
-        if let Some(sink) = self.sink.clone() {
-            // Capture stdout/stderr and send each line to the sink.
-            if let Some(out) = c.stdout.take() {
-                let s = sink.clone();
+        if let Some(out) = c.stdout.take() {
+            // Capture stdout: ring buffer first, then the optional sink.
+            let ring = self.log.clone();
+            if let Some(s) = self.sink.clone() {
                 tokio::spawn(async move {
                     use tokio::io::AsyncBufReadExt;
                     let mut lines = tokio::io::BufReader::new(out).lines();
                     while let Ok(Some(line)) = lines.next_line().await {
+                        ring.push(&line);
                         (s)(line);
                     }
                 });
+            } else {
+                tokio::spawn(async move {
+                    use tokio::io::AsyncBufReadExt;
+                    let mut lines = tokio::io::BufReader::new(out).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        ring.push(&line);
+                    }
+                });
             }
-            if let Some(err) = c.stderr.take() {
+        }
+        if let Some(err) = c.stderr.take() {
+            // Capture stderr: same treatment as stdout.
+            let ring = self.log.clone();
+            if let Some(s) = self.sink.clone() {
                 tokio::spawn(async move {
                     use tokio::io::AsyncBufReadExt;
                     let mut lines = tokio::io::BufReader::new(err).lines();
                     while let Ok(Some(line)) = lines.next_line().await {
-                        (sink)(line);
+                        ring.push(&line);
+                        (s)(line);
+                    }
+                });
+            } else {
+                tokio::spawn(async move {
+                    use tokio::io::AsyncBufReadExt;
+                    let mut lines = tokio::io::BufReader::new(err).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        ring.push(&line);
                     }
                 });
             }

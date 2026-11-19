@@ -167,7 +167,7 @@ struct TrayData {
     remote_profiles: Mutex<Vec<(String, String)>>,
     has_stats: bool,
     /// True when a log file exists (silent mode, or a previous run created
-    /// one) — controls the "Open log" menu entry.
+    /// one) — controls the "Open proxy log" menu entry.
     has_log: bool,
     router: bool,
     hwnd: AtomicPtr<core::ffi::c_void>,
@@ -262,7 +262,7 @@ impl TrayData {
                     ordered.push(("Open stats".to_string(), TrayAction::OpenStats));
                 }
                 if is_stop && self.has_log {
-                    ordered.push(("Open log".to_string(), TrayAction::OpenLog));
+                    ordered.push(("Open proxy log".to_string(), TrayAction::OpenLog));
                 }
             }
             ordered.push(("Restart proxy".to_string(), TrayAction::Restart));
@@ -612,14 +612,14 @@ impl Tray {
             for (label, action) in [
                 ("Stop backend", TrayAction::Stop),
                 ("Open stats", TrayAction::OpenStats),
-                ("Open log", TrayAction::OpenLog),
+                ("Open proxy log", TrayAction::OpenLog),
                 ("Restart proxy", TrayAction::Restart),
                 ("Exit", TrayAction::Quit),
             ] {
                 if label == "Open stats" && !self.has_stats {
                     continue;
                 }
-                if label == "Open log" && !self.has_log {
+                if label == "Open proxy log" && !self.has_log {
                     continue;
                 }
                 // Router mode keeps "Stop backend" (frees VRAM); only the

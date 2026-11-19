@@ -115,6 +115,63 @@ async fn api_stats(st: axum::extract::State<Arc<AppState>>) -> Response {
     stats_json(&st.0).await
 }
 
+/// GET /api/backend-log?since=<seq> — the backend's stdout/stderr ring
+/// (dashboard card). Local mode: read the ring. Bridge mode: forward to
+/// the remote proxy's /api/backend-log (served on its proxy port; the
+/// local token equals the remote's). Lines carry monotonic seq numbers;
+/// `since` is the client cursor (0 = everything currently buffered).
+pub async fn backend_log_response(state: &Arc<AppState>, since: u64) -> Response {
+    if state.is_remote() {
+        let url = format!("{}/api/backend-log?since={}", state.remote_base(), since);
+        let mut req = state.client.get(&url);
+        if let Some(t) = &state.config.token {
+            if !t.is_empty() {
+                req = req.bearer_auth(t);
+            }
+        }
+        return match req.send().await {
+            Ok(resp) => match resp.text().await {
+                Ok(body) => (
+                    StatusCode::OK,
+                    [("content-type", "application/json")],
+                    body,
+                )
+                    .into_response(),
+                Err(e) => (
+                    StatusCode::BAD_GATEWAY,
+                    format!("remote backend-log: {e}"),
+                )
+                    .into_response(),
+            },
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                format!("remote backend-log: {e}"),
+            )
+                .into_response(),
+        };
+    }
+    let (lines, newest) = state.backend_log.tail(since);
+    let body = serde_json::json!({
+        "since": newest,
+        "lines": lines
+            .iter()
+            .map(|l| serde_json::json!({ "seq": l.seq, "text": l.text }))
+            .collect::<Vec<_>>(),
+    });
+    (StatusCode::OK, [("content-type", "application/json")], body.to_string()).into_response()
+}
+
+async fn api_backend_log(
+    st: axum::extract::State<Arc<AppState>>,
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let since = query
+        .get("since")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+    backend_log_response(&st.0, since).await
+}
+
 /// Remote-admin: switch the active profile of THIS proxy. The bridge's
 /// tray sends it (it relays the user's command to the server it is
 /// attached to). Token-gated like every other stats route. Bridge
@@ -286,6 +343,7 @@ pub async fn run_stats(
     let app = Router::new()
         .route("/", get(dashboard))
         .route("/api/stats", get(api_stats))
+        .route("/api/backend-log", get(api_backend_log))
         .route("/api/chat", post(api_chat))
         .route("/api/admin/profile", post(api_admin_profile))
         .route("/api/admin/stop", post(api_admin_stop))
