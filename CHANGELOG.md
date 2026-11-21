@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.4 — 2026-11-21
+
+- **New: thinking-level control in the dashboard chat** — a lightbulb button next to the chat input opens a dropdown with the levels `model default`, `off`, `low`, `medium`, `high`, `xhigh`. The bulb is grayed on `off` and lit otherwise; the choice is remembered for the session. `off` sends `enable_thinking: false`, the levels send `reasoning_effort` with the matching value, `model default` sends no override — the request body is otherwise untouched.
+- **Fix: the GPU pager buttons no longer appear on single-GPU systems** — the shared `.btn` rule overrode the `[hidden]` state, so the `‹`/`›` buttons showed even with one GPU; they are now hidden unless there are multiple GPUs. Their tooltips are in English.
+
 ## v1.0.3 — 2026-11-19
 
 - **New: backend-log card in the dashboard** — a collapsible card in the backend panel streams the backend process's stdout/stderr live (2 s cursor-based polling; in bridge mode the endpoint is forwarded to the remote proxy). It auto-follows the tail until you scroll up, resumes when you return to the bottom, and auto-opens when a backend load fails — exactly when that output is needed. A "…" handle at the card's bottom center drag-resizes it (height remembered per panel); *Clear* empties the view.
