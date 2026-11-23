@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.5 — 2026-11-23
+
+- **Fix: the chat's `off` thinking level now works with llama.cpp backends** — llama.cpp's OpenAI-compatible server does not read the top-level `enable_thinking` (ninfer does), so `off` was silently ignored and the model kept thinking. `off` now also sends `reasoning_effort: "none"`, the standard way to disable reasoning on llama.cpp. ninfer and the other backends behave exactly as before — each backend applies only the field it understands.
+
 ## v1.0.4 — 2026-11-21
 
 - **New: thinking-level control in the dashboard chat** — a lightbulb button next to the chat input opens a dropdown with the levels `model default`, `off`, `low`, `medium`, `high`, `xhigh`. The bulb is grayed on `off` and lit otherwise; the choice is remembered for the session. `off` sends `enable_thinking: false`, the levels send `reasoning_effort` with the matching value, `model default` sends no override — the request body is otherwise untouched.

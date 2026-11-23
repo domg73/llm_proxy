@@ -1502,9 +1502,12 @@ async function chatSend() {
   try {
     // thinking level (kvmem-style): 'default' sends no override, 'off'
     // disables thinking, effort levels map to reasoning_effort.
+    // off sends BOTH fields: ninfer reads enable_thinking, llama.cpp
+    // servers read reasoning_effort ("none" = off) and ignore a
+    // top-level enable_thinking — each backend applies only what it knows.
     const tv = thinkLvl.v;
     const chatBody = { model: chatModelId || "default", messages: chatMsgs, stream: true, stream_options: { include_usage: true } };
-    if (tv === "off") chatBody.enable_thinking = false;
+    if (tv === "off") { chatBody.enable_thinking = false; chatBody.reasoning_effort = "none"; }
     else if (tv !== "default") chatBody.reasoning_effort = tv;
     const r = await fetch(authUrl("/api/chat"), {
       method: "POST",
