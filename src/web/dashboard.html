@@ -110,6 +110,7 @@ header .spacer { flex: 1; }
 .card .value { font-size: 22px; font-weight: 650; margin-top: 6px; font-family: var(--mono); }
 .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .tp { margin-top: 8px; display: grid; gap: 6px; }
+.tp[hidden] { display: none; }
 .tp .row { display: flex; justify-content: space-between; align-items: baseline; }
 .tp .k { color: var(--muted); font-size: 12px; }
 .tp .v { font-family: var(--mono); font-size: 18px; font-weight: 650; }
@@ -371,6 +372,8 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
 }
 .chat-input-row button:hover { border-color: var(--muted); }
 .chat-input-row button:disabled { opacity: .5; cursor: default; }
+#chat-clip { display: inline-flex; align-items: center; justify-content: center; }
+#chat-clip svg { width: 14px; height: 14px; display: block; }
 /* thinking bulb next to the input: click opens the level menu. Grayed
    when off, lit (warm glow) otherwise. */
 #chat-think { position: relative; display: inline-flex; align-items: center; justify-content: center; }
@@ -390,6 +393,17 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
 }
 #chat-think-menu .ti:hover { background: var(--chip); }
 #chat-think-menu .ti.cur { color: #ffc857; font-weight: 600; }
+/* web search progress panel (chat) */
+.chat-search { margin: 6px 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(87, 200, 255, .06); font-size: 11px; }
+.chat-search .q { color: #57c8ff; font-family: var(--mono); }
+.chat-search .src { display: block; margin: 2px 0; }
+.chat-search .src a { color: var(--muted); text-decoration: none; }
+.chat-search .src a:hover { color: #57c8ff; text-decoration: underline; }
+.chat-search .err { color: #ff6b6b; }
+#chat-web { position: relative; display: inline-flex; align-items: center; justify-content: center; }
+#chat-web svg { width: 14px; height: 14px; display: block; }
+#chat-web.lit { color: #57c8ff; }
+#chat-web.lit svg { filter: drop-shadow(0 0 3px rgba(87, 200, 255, .8)); }
 
 .mono { font-family: var(--mono); font-size: 12.5px; }
 /* profile switcher in the backend card (dropdown + stop) */
@@ -496,7 +510,12 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>
            <div id="chat-think-menu" hidden></div>
          </button>
-         <button id="chat-clip" title="attach images or text documents">attach</button>
+         <button id="chat-web" title="web search: the model searches the web while answering">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+         </button>
+         <button id="chat-clip" title="attach images or text documents">
+           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+         </button>
         <input type="file" id="chat-file" multiple style="display:none"
                accept="image/*,.txt,.md,.log,.csv,.json,.xml,.yml,.yaml,.toml,.ini,.py,.js,.ts,.rs,.c,.cpp,.h,.java,.go,.sh,.html,.css,.sql">
         <input id="chat-input" type="text" placeholder="message… (Enter to send)" autocomplete="off">
@@ -524,10 +543,16 @@ footer a.gh:hover { text-decoration: none; opacity: .7; }
       <div class="sub" id="k-loads-sub">last — · avg —</div>
     </div>
     <div class="card">
-      <div class="label">throughput <span class="tag">tok/s</span></div>
-      <div class="tp">
+      <div class="label gpu-label"><span id="tp-name">throughput</span> <span class="tag">tok/s</span><span style="flex:1"></span>
+        <button class="gpu-pager btn btn-square" id="tp-prev" title="Previous page">‹</button>
+        <button class="gpu-pager btn btn-square" id="tp-next" title="Next page">›</button></div>
+      <div class="tp" id="tp-backend">
         <div class="row"><span class="k">prefill</span><span class="v" id="k-prefill">—</span></div>
         <div class="row"><span class="k">decode</span><span class="v" id="k-decode">—</span></div>
+      </div>
+      <div class="tp" id="tp-requests" hidden>
+        <div class="row"><span class="k">prefill</span><span class="v" id="k-req-prefill">—</span></div>
+        <div class="row"><span class="k">decode</span><span class="v" id="k-req-decode">—</span></div>
       </div>
     </div>
   </div>
@@ -927,6 +952,29 @@ function render(d) {
   tpDec = pick(tp ? tp.decode_tps : NaN, m["llamacpp:predicted_tokens_seconds"], tpDec);
   $("#k-prefill").textContent = fmtMetric(tpPref);
   $("#k-decode").textContent = fmtMetric(tpDec);
+
+  // Latest request with token details (first entry — the ring is
+  // newest-first) drives the per-request page; same derivation as the
+  // inspector. Sticky: a newer request without details keeps the last.
+  const rq = (Array.isArray(st.recent) ? st.recent : []).find((x) => x.prompt_tokens != null);
+  if (rq) {
+    // Raw tok/s (the label already says tok/s — no unit on the values).
+    const rate = (tokens, ms) => (ms != null && ms > 0 ? tokens / (ms / 1000) : NaN);
+    reqPref = rate(rq.prompt_tokens - (rq.cached_prompt_tokens || 0), rq.ttft_ms);
+    reqDec = rate(rq.completion_tokens,
+      rq.ttft_ms != null && rq.ms > rq.ttft_ms ? rq.ms - rq.ttft_ms : null);
+  }
+  $("#k-req-prefill").textContent = fmtMetric(reqPref);
+  $("#k-req-decode").textContent = fmtMetric(reqDec);
+  // Page switch
+  $("#tp-backend").hidden = tpPage !== 0;
+  $("#tp-requests").hidden = tpPage !== 1;
+  $("#tp-name").textContent = tpPage === 0 ? "throughput" : "requests";
+  if (window.__tpPagerBound !== true) {
+    window.__tpPagerBound = true;
+    $("#tp-prev").onclick = () => { tpPage = (tpPage + 1) % 2; if (window.__stats) render(window.__stats); };
+    $("#tp-next").onclick = () => { tpPage = (tpPage + 1) % 2; if (window.__stats) render(window.__stats); };
+  }
 
   // background neural net: driven by the PROXY ground truth — st.generating
   // is true while a request is in flight (or finished <2 s ago). Binary by
@@ -1329,6 +1377,8 @@ let mdPending = false;  // markdown re-render throttle flag (one per frame)
 let chatAbort = null;
 let chatModelId = null;
 let tpPref = 0, tpDec = 0;  // sticky pinned throughput: last non-zero value (kept while the window is zero)
+let reqPref = null, reqDec = null;  // latest request's per-request rates (sticky, inspector formula)
+let tpPage = 0;  // 0: backend throughput, 1: latest request
 
 function chatBubble(cls, text) {
   const el = document.createElement("div");
@@ -1492,8 +1542,43 @@ async function chatSend() {
   });
   chatAttach.length = 0;
   renderAttach();
-  const modelEl = chatBubble("model", "…");
-  let thinkEl = null, thinkBox = null;
+    const modelEl = chatBubble("model", "…");
+    let thinkEl = null, thinkBox = null;
+    let searchEl = null;
+    // websearch progress panel: one per send, above the answer
+    function wsPanel() {
+      if (searchEl) return searchEl;
+      searchEl = document.createElement("div");
+      searchEl.className = "chat-search";
+      searchEl.innerHTML = '<div class="q">…</div><div class="srcs"></div>';
+      chatLogEl.insertBefore(searchEl, modelEl);
+      return searchEl;
+    }
+    function wsHandle(j) {
+      const p = wsPanel();
+      const q = p.querySelector(".q");
+      const srcs = p.querySelector(".srcs");
+      if (j.phase === "query") {
+        q.textContent = "searching: " + (j.query || "…");
+      } else if (j.phase === "sources") {
+        q.textContent = "searched: " + (j.query || "");
+        (j.sources || []).forEach((s) => {
+          const d = document.createElement("span");
+          d.className = "src";
+          const a = document.createElement("a");
+          a.href = s.url; a.target = "_blank"; a.rel = "noopener";
+          a.textContent = s.title || s.url;
+          d.appendChild(a);
+          srcs.appendChild(d);
+        });
+      } else if (j.phase === "error") {
+        const e = document.createElement("div");
+        e.className = "err";
+        e.textContent = "search error: " + (j.message || "unknown");
+        p.appendChild(e);
+      }
+      if (chatStick) chatLogEl.scrollTop = chatLogEl.scrollHeight;
+    }
   const t0 = performance.now();
   const ctrl = new AbortController();
   chatAbort = ctrl;
@@ -1507,6 +1592,7 @@ async function chatSend() {
     // top-level enable_thinking — each backend applies only what it knows.
     const tv = thinkLvl.v;
     const chatBody = { model: chatModelId || "default", messages: chatMsgs, stream: true, stream_options: { include_usage: true } };
+    if (webSearchOn.v) chatBody.web_search = true;
     if (tv === "off") { chatBody.enable_thinking = false; chatBody.reasoning_effort = "none"; }
     else if (tv !== "default") chatBody.reasoning_effort = tv;
     const r = await fetch(authUrl("/api/chat"), {
@@ -1519,6 +1605,7 @@ async function chatSend() {
     });
     if (!r.ok || !r.body) throw new Error("status " + r.status);
     let buf = "";
+    let sseEvent = null;  // named SSE event for the next data line (websearch)
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     while (true) {
@@ -1529,6 +1616,8 @@ async function chatSend() {
       while ((i = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, i).trim();
         buf = buf.slice(i + 1);
+        if (line === "") { sseEvent = null; continue; }
+        if (line.startsWith("event:")) { sseEvent = line.slice(6).trim(); continue; }
         if (!line.startsWith("data:")) {
           // Trailing SSE comment from the proxy: server-side ttft/duration.
           const ps = line.match(/^: proxy-stats (\{.*\})\s*$/);
@@ -1536,9 +1625,10 @@ async function chatSend() {
           continue;
         }
         const data = line.slice(5).trim();
-        if (data === "[DONE]") continue;
+        if (data === "[DONE]") { sseEvent = null; continue; }
         let j;
-        try { j = JSON.parse(data); } catch (e) { continue; }
+        try { j = JSON.parse(data); } catch (e) { sseEvent = null; continue; }
+        if (sseEvent === "websearch") { sseEvent = null; wsHandle(j); continue; }
         if (j.usage) usage = j.usage;
         const d = j.choices && j.choices[0] && j.choices[0].delta;
         if (!d) continue;
@@ -1625,6 +1715,17 @@ $("#chat-send").onclick = chatSend;
 // reasoning_effort. Grayed when off, lit otherwise; persisted like the
 // chat open state.
 const thinkLvl = { v: "default" };
+// web search toggle — when lit, chat bodies carry web_search: true
+// and the proxy runs the search loop (model decides when to search).
+// Default ON; only an explicit "0" in localStorage turns it off.
+const webSearchOn = { v: true };
+try { if (localStorage.getItem("llmchat.websearch") === "0") webSearchOn.v = false; } catch (e) {}
+$("#chat-web").classList.toggle("lit", webSearchOn.v);
+$("#chat-web").onclick = () => {
+  webSearchOn.v = !webSearchOn.v;
+  $("#chat-web").classList.toggle("lit", webSearchOn.v);
+  try { localStorage.setItem("llmchat.websearch", webSearchOn.v ? "1" : "0"); } catch (e) {}
+};
 const thinkOrder = ["default", "off", "low", "medium", "high", "xhigh"];
 const thinkBtn = $("#chat-think");
 const thinkMenu = $("#chat-think-menu");

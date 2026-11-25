@@ -578,6 +578,13 @@ pub async fn run_app() -> anyhow::Result<()> {
         tokio::spawn(proxy::run_proxy(state.clone(), proxy_addr.clone(), proxy_listener));
     tokio::spawn(web::run_stats(state.clone(), stats_addr.clone(), stats_listener));
 
+    // Optional Telegram bot: spawned only when [telegram] is configured
+    // with a token (validated in Config::parse). Long polling — its only
+    // network effect is outbound HTTPS to api.telegram.org.
+    if state.config.telegram.is_some() {
+        tokio::spawn(crate::telegram::run(state.clone()));
+    }
+
     #[cfg(windows)]
     if is_console(&mode) {
         if state.is_remote() {
@@ -597,6 +604,9 @@ pub async fn run_app() -> anyhow::Result<()> {
                 p.backend_port()
             );
             println!("stats dashboard: {}   (tray: stop/exit)", stats_url);
+        }
+        if state.config.telegram.is_some() {
+            println!("telegram bot: on (long polling)");
         }
     } else {
         info!(

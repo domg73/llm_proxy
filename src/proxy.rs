@@ -10,9 +10,9 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use futures::{Stream, StreamExt};
+use futures::{SinkExt, Stream, StreamExt};
 use tracing::{debug, info, warn};
 
 use crate::backend::{BackendState, SpawnSpec};
@@ -965,6 +965,25 @@ async fn relay(
                 }
             }
         }
+        // ---------- Web search (alpha): the dashboard chat's globe toggle
+        // sets `web_search: true` in the body. Instead of a single relayed
+        // request, run the tool loop: the model decides to search (OpenAI
+        // function calling), the proxy executes it (Exa keyless MCP), feeds
+        // the result back, and repeats until the model answers. Only chat
+        // completions with a parseable JSON body reach this branch.
+        if m == "POST"
+            && (path == "/chat/completions" || path == "/v1/chat/completions")
+            && parsed
+                .as_ref()
+                .and_then(|v| v.get("web_search"))
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false)
+        {
+            return web_search_chat(
+                state, m, path, &target, fwd_headers, body_bytes, detail, guard,
+            ).await;
+        }
+
         let mut b = state.client
             .request(method, &target)
             .headers(fwd_headers);
@@ -1229,4 +1248,682 @@ where
             other => other,
         }
     }
+}
+
+
+
+// =============================================================================
+// Web search (alpha): dashboard chat, tool loop
+// =============================================================================
+
+/// Maximum model→search→model rounds per chat message (guard against a
+/// model that keeps searching).
+const MAX_SEARCH_ROUNDS: usize = 5;
+
+/// Stream adapter: a `futures` mpsc receiver yields bare `Bytes`; axum's
+/// `Body::from_stream` wants `Result<Bytes, E>`.
+struct OkBytes(futures::channel::mpsc::Receiver<bytes::Bytes>);
+
+impl Stream for OkBytes {
+    type Item = Result<bytes::Bytes, std::io::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().0)
+            .poll_next(cx)
+            .map(|o| o.map(Ok::<bytes::Bytes, std::io::Error>))
+    }
+}
+
+/// `event: websearch` SSE frame carrying a progress payload
+/// ({phase: query|sources|error, query, sources?/message?}). Old dashboard
+/// versions skip it (no `choices` key), new ones render it.
+fn wsearch_event(v: &serde_json::Value) -> bytes::Bytes {
+    bytes::Bytes::from(format!("event: websearch\ndata: {}\n\n", v.to_string()))
+}
+
+/// Where `websearch` progress events go: SSE frames to the client
+/// (streaming), or nowhere (stream:false path). `send` returns false when
+/// the client is gone so the loop can stop early.
+enum SearchNotify {
+    Sse(futures::channel::mpsc::Sender<bytes::Bytes>),
+    None,
+}
+
+impl SearchNotify {
+    async fn send(&mut self, ev: &serde_json::Value) -> bool {
+        match self {
+            SearchNotify::Sse(tx) => tx.send(wsearch_event(ev)).await.is_ok(),
+            SearchNotify::None => true,
+        }
+    }
+}
+
+/// The chat request carries `web_search: true` — run the tool loop against
+/// the same upstream a plain request would reach (`target`, already routed:
+/// bridge → the remote proxy, local → the active profile's backend, model id
+/// already translated). Streams back to the client with `websearch` progress
+/// events between rounds; records ONE stats entry for the whole message.
+async fn web_search_chat(
+    state: &Arc<AppState>,
+    m: &str,
+    path: &str,
+    target: &str,
+    fwd_headers: HeaderMap,
+    body: bytes::Bytes,
+    detail: crate::stats::ReqDetail,
+    guard: Arc<Mutex<Option<crate::stats::ReqGuard>>>,
+) -> Result<Response, (StatusCode, String)> {
+    let t0 = std::time::Instant::now();
+    let mut v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return Err((StatusCode::BAD_REQUEST, format!("web_search: body is not JSON: {e}"))),
+    };
+    if let Some(obj) = v.as_object_mut() {
+        obj.remove("web_search");
+    }
+    let stream = v.get("stream").and_then(|s| s.as_bool()).unwrap_or(true);
+    // Advertise the tool (replace any client-provided list — this is the
+    // dashboard's bridge, the client never sends its own tools) and let the
+    // model decide when to use it.
+    let tool: serde_json::Value =
+        serde_json::from_str(crate::search::WEB_SEARCH_TOOL).unwrap_or_default();
+    v["tools"] = serde_json::json!([tool]);
+    if v.get("tool_choice").is_none() {
+        v["tool_choice"] = serde_json::Value::String("auto".to_string());
+    }
+    let key = state.config.web_search.exa_api_key.clone();
+
+    if !stream {
+        return web_search_nonstream(
+            state, m, path, target, fwd_headers, v, key, t0, guard, detail,
+        ).await;
+    }
+
+    // --- Stream mode. Round 0 is sent NOW, so its status/headers (or an
+    // early error) can be returned to the client; the remaining loop runs in
+    // a task feeding the channel-backed body.
+    let body0 = serde_json::to_vec(&v)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let resp0 = match state
+        .client
+        .post(target)
+        .headers(fwd_headers.clone())
+        .body(body0)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            finish_search_stats(state, &guard, m, path, 502, t0.elapsed().as_millis() as u64, 0, None, &detail);
+            return Err((StatusCode::BAD_GATEWAY, format!("backend request failed: {e}")));
+        }
+    };
+    let status = resp0.status();
+    let resp_headers = resp0.headers().clone();
+    let is_sse = resp_headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("text/event-stream"));
+    if !status.is_success() || !is_sse {
+        // Error or plain-JSON first response: forward it untouched, no loop.
+        let full = match resp0.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                finish_search_stats(state, &guard, m, path, 502, t0.elapsed().as_millis() as u64, 0, None, &detail);
+                return Err((StatusCode::BAD_GATEWAY, format!("reading backend response failed: {e}")));
+            }
+        };
+        let mut d = detail;
+        if let Ok(text) = std::str::from_utf8(&full) {
+            if let Ok(j) = serde_json::from_str::<serde_json::Value>(text) {
+                if let Some(u) = j.get("usage") {
+                    d.prompt_tokens = u.get("prompt_tokens").and_then(|x| x.as_u64());
+                    d.completion_tokens =
+                        u.get("completion_tokens").or_else(|| u.get("output_tokens")).and_then(|x| x.as_u64());
+                }
+            }
+        }
+        finish_search_stats(state, &guard, m, path, status.as_u16(), t0.elapsed().as_millis() as u64, d.completion_tokens.unwrap_or(0), None, &d);
+        return response_with_headers(status, &resp_headers, axum::body::Body::from(full));
+    }
+
+    // Live SSE: hand the client the channel, keep looping in a task.
+    let (tx, rx) = futures::channel::mpsc::channel::<bytes::Bytes>(32);
+    tokio::spawn(web_search_stream_loop(
+        state.clone(),
+        m.to_string(),
+        path.to_string(),
+        target.to_string(),
+        fwd_headers,
+        v,
+        key,
+        t0,
+        guard,
+        detail,
+        tx,
+    ));
+    response_with_headers(status, &resp_headers, axum::body::Body::from_stream(OkBytes(rx)))
+}
+
+/// Build a Response from a status + header set + body.
+fn response_with_headers(
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: axum::body::Body,
+) -> Result<Response, (StatusCode, String)> {
+    let mut builder = Response::builder().status(status);
+    for (k, vv) in headers.iter() {
+        builder = builder.header(k, vv);
+    }
+    builder
+        .body(body)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// One round's accumulated tool-call deltas (by index).
+#[derive(Default, Clone)]
+struct RoundTc {
+    id: String,
+    name: String,
+    args: String,
+}
+
+struct RoundAcc {
+    content: String,
+    tool_calls: Vec<RoundTc>,
+    finish: Option<String>,
+    usage: Option<serde_json::Value>,
+}
+
+impl Default for RoundAcc {
+    fn default() -> Self {
+        Self {
+            content: String::new(),
+            tool_calls: Vec::new(),
+            finish: None,
+            usage: None,
+        }
+    }
+}
+
+/// Fold one SSE chunk JSON into the round accumulator.
+fn accumulate_round(acc: &mut RoundAcc, j: &serde_json::Value) {
+    if let Some(u) = j.get("usage") {
+        if u.is_object() {
+            acc.usage = Some(u.clone());
+        }
+    }
+    let Some(ch) = j.get("choices").and_then(|c| c.get(0)) else {
+        return;
+    };
+    if let Some(fr) = ch.get("finish_reason").and_then(|f| f.as_str()) {
+        if !fr.is_empty() {
+            acc.finish = Some(fr.to_string());
+        }
+    }
+    let Some(d) = ch.get("delta") else { return };
+    if let Some(c) = d.get("content").and_then(|c| c.as_str()) {
+        acc.content.push_str(c);
+    }
+    let Some(tcs) = d.get("tool_calls").and_then(|t| t.as_array()) else {
+        return;
+    };
+    for tc in tcs {
+        let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+        acc.tool_calls.resize(idx + 1, RoundTc::default());
+        let e = &mut acc.tool_calls[idx];
+        if let Some(id) = tc.get("id").and_then(|s| s.as_str()) {
+            e.id = id.to_string();
+        }
+        if let Some(n) = tc.get("function").and_then(|f| f.get("name")).and_then(|s| s.as_str()) {
+            e.name = n.to_string();
+        }
+        if let Some(a) = tc.get("function").and_then(|f| f.get("arguments")).and_then(|s| s.as_str()) {
+            e.args.push_str(a);
+        }
+    }
+}
+/// Execute the model's tool calls for one round and return
+/// (results for the tool messages, the assistant message's tool_calls array).
+/// Progress events go through `notify`; a `false` return stops early
+/// (client gone). Unknown tools are answered with an error the model reads.
+async fn run_tool_calls(
+    state: &Arc<AppState>,
+    key: &Option<String>,
+    tool_calls: &[RoundTc],
+    notify: &mut SearchNotify,
+) -> (Vec<(String, serde_json::Value)>, serde_json::Value) {
+    let mut results: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut assistant_tool_calls = serde_json::json!([]);
+    for tc in tool_calls {
+        let args: serde_json::Value =
+            serde_json::from_str(&tc.args).unwrap_or(serde_json::json!({}));
+        let query = args.get("query").and_then(|q| q.as_str()).unwrap_or("").to_string();
+        let result = if tc.name != "web_search" {
+            // The model called a tool we do not provide — tell it so.
+            let _ = notify
+                .send(&serde_json::json!({ "phase": "error", "message": format!("unknown tool: {}", tc.name) }))
+                .await;
+            serde_json::Value::String(format!("unknown tool: {}", tc.name))
+        } else {
+            if !notify
+                .send(&serde_json::json!({ "phase": "query", "query": query }))
+                .await
+            {
+                break;
+            }
+            match crate::search::exa_search(&state.client, key, &args).await {
+                Ok(text) => {
+                    let sources: Vec<serde_json::Value> = crate::search::sources_from_text(&text)
+                        .into_iter()
+                        .take(5)
+                        .map(|(t, u)| serde_json::json!({ "title": t, "url": u }))
+                        .collect();
+                    if !notify
+                        .send(&serde_json::json!({ "phase": "sources", "query": query, "sources": sources }))
+                        .await
+                    {
+                        break;
+                    }
+                    serde_json::Value::String(text)
+                }
+                Err(e) => {
+                    let _ = notify
+                        .send(&serde_json::json!({ "phase": "error", "query": query, "message": e.to_string() }))
+                        .await;
+                    // Feed the error back as the tool result: the model can
+                    // retry with another query or answer from its own
+                    // knowledge.
+                    serde_json::Value::String(
+                        "web search failed: ".to_string()
+                            + &e.to_string()
+                            + " — answer from your own knowledge or retry with a different query",
+                    )
+                }
+            }
+        };
+        results.push((tc.id.clone(), result));
+        assistant_tool_calls
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": tc.id,
+                "type": "function",
+                "function": { "name": tc.name, "arguments": tc.args }
+            }));
+    }
+    (results, assistant_tool_calls)
+}
+
+/// The streaming loop: round after round, backend bytes piped to the client
+/// as they arrive, `websearch` events between rounds, tool calls executed in
+/// the proxy. Ends when the model stops calling the tool, the round cap is
+/// hit, upstream errors, or the client disconnects (channel closed).
+async fn web_search_stream_loop(
+    state: Arc<AppState>,
+    m: String,
+    path: String,
+    target: String,
+    fwd_headers: HeaderMap,
+    mut v: serde_json::Value,
+    key: Option<String>,
+    t0: std::time::Instant,
+    guard: Arc<Mutex<Option<crate::stats::ReqGuard>>>,
+    mut detail: crate::stats::ReqDetail,
+    tx: futures::channel::mpsc::Sender<bytes::Bytes>,
+) {
+    let mut tx = tx;
+    let mut notify = SearchNotify::Sse(tx.clone());
+    let mut messages: Vec<serde_json::Value> = v
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut total_completion: u64 = 0;
+    let mut ttft: Option<u64> = None;
+    let mut saw_error = false;
+    let mut searches = 0;
+
+    'rounds: for _round in 0..MAX_SEARCH_ROUNDS {
+        v["messages"] = serde_json::Value::Array(messages.clone());
+        let body = match serde_json::to_vec(&v) {
+            Ok(b) => b,
+            Err(_) => break,
+        };
+        let resp = match state
+            .client
+            .post(&target)
+            .headers(fwd_headers.clone())
+            .body(body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = notify
+                    .send(&serde_json::json!({ "phase": "error", "message": format!("upstream: {e}") }))
+                    .await;
+                saw_error = true;
+                break;
+            }
+        };
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            let short: String = text.chars().take(300).collect();
+            let _ = notify
+                .send(
+                    &serde_json::json!({
+                        "phase": "error",
+                        "message": format!("upstream {} : {short}", status.as_u16())
+                    }),
+                )
+                .await;
+            saw_error = true;
+            break;
+        }
+        let mut acc = RoundAcc::default();
+        let mut linebuf = String::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(_) => break,
+            };
+            if let Ok(text) = std::str::from_utf8(&chunk) {
+                linebuf.push_str(text);
+                while let Some(pos) = linebuf.find('\n') {
+                    let line: String = linebuf.drain(..=pos).collect();
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let Some(payload) = line.strip_prefix("data:").map(str::trim) else {
+                        continue;
+                    };
+                    if payload == "[DONE]" {
+                        continue;
+                    }
+                    let Ok(j) = serde_json::from_str::<serde_json::Value>(payload) else {
+                        continue;
+                    };
+                    if ttft.is_none()
+                        && j.get("choices")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c| c.get("delta"))
+                            .and_then(|d| d.get("content").or_else(|| d.get("reasoning_content")))
+                            .and_then(|c| c.as_str())
+                            .is_some_and(|s| !s.is_empty())
+                    {
+                        ttft = Some(t0.elapsed().as_millis() as u64);
+                    }
+                    accumulate_round(&mut acc, &j);
+                }
+            }
+            // Pipe the raw bytes through to the client.
+            if tx.send(chunk).await.is_err() {
+                break 'rounds; // client disconnected
+            }
+        }
+        // Round finished: fold its usage into the message stats.
+        if let Some(u) = acc.usage.clone() {
+            if let Some(c) =
+                u.get("completion_tokens").or_else(|| u.get("output_tokens")).and_then(|x| x.as_u64())
+            {
+                total_completion += c;
+            }
+            detail.prompt_tokens =
+                u.get("prompt_tokens").or_else(|| u.get("input_tokens")).and_then(|x| x.as_u64());
+            detail.cached_prompt_tokens = u
+                .get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(|x| x.as_u64());
+        }
+        let tool_calls: Vec<RoundTc> =
+            acc.tool_calls.into_iter().filter(|t| !t.name.is_empty()).collect();
+        if tool_calls.is_empty() {
+            break; // final answer
+        }
+        searches += 1;
+        if searches >= MAX_SEARCH_ROUNDS {
+            let _ = notify
+                .send(
+                    &serde_json::json!({
+                        "phase": "error",
+                        "message": "web search: search limit reached for this message"
+                    }),
+                )
+                .await;
+            saw_error = true;
+            break;
+        }
+        // Execute the searches (notified over SSE), append the round.
+        let (results, assistant_tool_calls) =
+            run_tool_calls(&state, &key, &tool_calls, &mut notify).await;
+        let mut assistant = serde_json::json!({ "role": "assistant" });
+        assistant["content"] = if acc.content.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(acc.content)
+        };
+        assistant["tool_calls"] = assistant_tool_calls;
+        messages.push(assistant);
+        for (id, content) in results {
+            messages.push(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "content": content
+            }));
+        }
+    }
+
+    // Trailing stats comment (the dashboard reads it for the decode rate),
+    // then close the stream and record the request — one stats entry per
+    // user message, not per round.
+    let dur = t0.elapsed().as_millis() as u64;
+    // Option -> JSON: a plain number, or null (never Rust's Some(..)/None
+    // debug form, which the dashboard's JSON.parse would reject and drop
+    // the decode rate).
+    let tt_json = ttft.map(|t| t.to_string()).unwrap_or_else(|| "null".into());
+    let _ = tx
+        .send(bytes::Bytes::from(format!(
+            ": proxy-stats {{\"ttft_ms\":{tt_json},\"duration_ms\":{dur}}}\n\n"
+        )))
+        .await;
+    detail.completion_tokens = Some(total_completion);
+    finish_search_stats(
+        &state,
+        &guard,
+        &m,
+        &path,
+        if saw_error { 502 } else { 200 },
+        dur,
+        total_completion,
+        ttft,
+        &detail,
+    );
+}
+
+/// stream:false (robustness path — the dashboard always streams): buffered
+/// rounds, same loop, the final JSON response forwarded as-is.
+async fn web_search_nonstream(
+    state: &Arc<AppState>,
+    m: &str,
+    path: &str,
+    target: &str,
+    fwd_headers: HeaderMap,
+    mut v: serde_json::Value,
+    key: Option<String>,
+    t0: std::time::Instant,
+    guard: Arc<Mutex<Option<crate::stats::ReqGuard>>>,
+    detail: crate::stats::ReqDetail,
+) -> Result<Response, (StatusCode, String)> {
+    let mut notify = SearchNotify::None;
+    let mut messages: Vec<serde_json::Value> = v
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .cloned()
+        .unwrap_or_default();
+    for _round in 0..MAX_SEARCH_ROUNDS {
+        v["messages"] = serde_json::Value::Array(messages.clone());
+        let body = serde_json::to_vec(&v)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let resp = match state
+            .client
+            .post(target)
+            .headers(fwd_headers.clone())
+            .body(body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                finish_search_stats(
+                    state,
+                    &guard,
+                    m,
+                    path,
+                    502,
+                    t0.elapsed().as_millis() as u64,
+                    0,
+                    None,
+                    &detail,
+                );
+                return Err((StatusCode::BAD_GATEWAY, format!("backend request failed: {e}")));
+            }
+        };
+        let status = resp.status();
+        let resp_headers = resp.headers().clone();
+        let full = resp.bytes().await.map_err(|e| {
+            finish_search_stats(
+                state,
+                &guard,
+                m,
+                path,
+                502,
+                t0.elapsed().as_millis() as u64,
+                0,
+                None,
+                &detail,
+            );
+            (StatusCode::BAD_GATEWAY, format!("reading backend response failed: {e}"))
+        })?;
+        let j: serde_json::Value =
+            serde_json::from_str(std::str::from_utf8(&full).unwrap_or("")).unwrap_or(serde_json::Value::Null);
+        let tool_calls: Vec<RoundTc> = j
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|c| c.get("tool_calls"))
+            .and_then(|t| t.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|tc| RoundTc {
+                        id: tc
+                            .get("id")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        name: tc
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        args: tc
+                            .get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                    .filter(|t| !t.name.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if status.is_success() && !tool_calls.is_empty() {
+            let (results, assistant_tool_calls) =
+                run_tool_calls(state, &key, &tool_calls, &mut notify).await;
+            let mut assistant = j
+                .get("choices")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("message"))
+                .cloned()
+                .unwrap_or(serde_json::json!({ "role": "assistant" }));
+            assistant["tool_calls"] = assistant_tool_calls;
+            messages.push(assistant);
+            for (id, content) in results {
+                messages.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": id,
+                    "content": content
+                }));
+            }
+            continue;
+        }
+        // Final round (or an error): forward as-is, record stats.
+        let dur = t0.elapsed().as_millis() as u64;
+        let mut d = detail;
+        if let Some(u) = j.get("usage") {
+            d.prompt_tokens = u.get("prompt_tokens").and_then(|x| x.as_u64());
+            d.completion_tokens =
+                u.get("completion_tokens").or_else(|| u.get("output_tokens")).and_then(|x| x.as_u64());
+        }
+        finish_search_stats(
+            state,
+            &guard,
+            m,
+            path,
+            status.as_u16(),
+            dur,
+            d.completion_tokens.unwrap_or(0),
+            None,
+            &d,
+        );
+        return response_with_headers(status, &resp_headers, axum::body::Body::from(full));
+    }
+    finish_search_stats(
+        state,
+        &guard,
+        m,
+        path,
+        502,
+        t0.elapsed().as_millis() as u64,
+        0,
+        None,
+        &detail,
+    );
+    Err((StatusCode::BAD_GATEWAY, "web_search: round limit exceeded".to_string()))
+}
+
+/// request_finished + guard completion for the web_search paths (they own
+/// their stats entry — one per user message, not per round).
+fn finish_search_stats(
+    state: &AppState,
+    guard: &Arc<Mutex<Option<crate::stats::ReqGuard>>>,
+    m: &str,
+    path: &str,
+    status: u16,
+    elapsed_ms: u64,
+    tokens: u64,
+    ttft: Option<u64>,
+    detail: &crate::stats::ReqDetail,
+) {
+    if let Some(mut g) = guard.lock().unwrap().take() {
+        g.done = true;
+    }
+    let mut d = detail.clone();
+    if d.ttft_ms.is_none() {
+        d.ttft_ms = ttft;
+    }
+    state.stats.request_finished(
+        m,
+        path,
+        status,
+        status < 500,
+        tokens,
+        elapsed_ms,
+        (status >= 500).then(|| format!("status {status}")),
+        &d,
+    );
 }

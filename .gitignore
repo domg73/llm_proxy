@@ -28,3 +28,7 @@
 /make_app_icon.py
 /make_dots.py
 /make_icon.py
+
+# Local web-search test instance (private config + binaries) and python cache
+/test_ws/
+/__pycache__/

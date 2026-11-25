@@ -359,6 +359,14 @@ pub async fn run_stats(
 }
 
 pub async fn stats_json(state: &Arc<AppState>) -> Response {
+    let v = stats_value(state).await;
+    (StatusCode::OK, [("content-type".to_string(), "application/json".to_string())], v.to_string()).into_response()
+}
+
+/// The /api/stats JSON payload: the cached remote feed in bridge mode, the
+/// full local feed otherwise. Shared with the Telegram bot's /status, so the
+/// bot always reports exactly what the dashboard shows.
+pub async fn stats_value(state: &Arc<AppState>) -> serde_json::Value {
     // Bridge mode: the dashboard is driven by the remote /api/stats feed
     // (polled in the background, app.rs). The remote instance reports its
     // own backend state, profile and system metrics. If the feed is not
@@ -393,7 +401,7 @@ pub async fn stats_json(state: &Arc<AppState>) -> Response {
         if let Some(o) = v.as_object_mut() {
             o.remove("profiles");
         }
-        return (StatusCode::OK, [("content-type".to_string(), "application/json".to_string())], v.to_string()).into_response();
+        return v;
     }
 
     // Local mode: full feed from this proxy's own profile and system
@@ -547,7 +555,7 @@ pub async fn stats_json(state: &Arc<AppState>) -> Response {
         "stats": state.stats.snapshot(),
         "profiles": profiles,
     });
-    (StatusCode::OK, [("content-type".to_string(), "application/json".to_string())], v.to_string()).into_response()
+    v
 }
 
 /// Display name of the backend executable from the config (base name,

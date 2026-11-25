@@ -18,6 +18,24 @@ active_profile = 'ninfer'
 port = 9931
 stats_port = 9935
 
+# Web search in the chat (dashboard + Telegram bot): on by default, toggled
+# from the UI — no config needed. Optional: an Exa API key lifts the
+# free-tier rate limits of the keyless search endpoint.
+# [web_search]
+# exa_api_key = ''
+
+# Telegram bot: chat with the active model from Telegram. Long polling only —
+# no public port, no webhook. Section absent (or bot_token empty) = bot off.
+# [telegram]
+# bot_token = ''            # from @BotFather
+# allow_user_ids = []       # the complete allowlist — a non-empty list admits
+#                           # exactly those ids (include your own); empty =
+#                           # the first user to write becomes the owner
+# system_prompt = ''        # optional; unset or empty = no system message
+# history = 20              # messages of context kept per chat
+# thinking = 'default'      # default | off | low | medium | high | xhigh
+# web_search = true         # initial state of the /search toggle
+
 # model_id: required — the id clients use. It forms the composite id
 #   <profile>/<model_id> that /v1/models advertises and the harness always
 #   addresses the model by it. If the backend reports a different id in its

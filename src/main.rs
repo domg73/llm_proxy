@@ -20,6 +20,7 @@
 mod app;
 mod config;
 mod proxy;
+mod search;
 mod stats;
 mod web;
 
@@ -29,6 +30,7 @@ mod web;
 // on Linux the proxy runs headless.
 mod backend;
 mod sysmon;
+mod telegram;
 #[cfg(windows)]
 mod tray;
 

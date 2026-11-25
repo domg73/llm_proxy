@@ -111,9 +111,60 @@ impl Profile {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebSearchConfig {
+    /// Optional Exa API key, sent as `x-api-key`: lifts the free-tier rate
+    /// limits of the keyless endpoint. Empty/absent → keyless.
+    pub exa_api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelegramConfig {
+    /// Bot token from @BotFather. The bot starts when the `[telegram]`
+    /// section is present; an empty token is a config error.
+    pub bot_token: String,
+    /// Telegram user IDs allowed to use the bot. Empty: the FIRST user to
+    /// write becomes the owner (the bot replies with their ID — save it
+    /// here to make the choice explicit). Everyone else is refused.
+    pub allow_user_ids: Vec<i64>,
+    /// Optional system prompt prepended to every conversation.
+    pub system_prompt: Option<String>,
+    /// Messages of history kept per chat (default 20).
+    pub history: u32,
+    /// Initial thinking level — same semantics as the dashboard:
+    /// default|off|low|medium|high|xhigh (`/think` switches it at runtime).
+    pub thinking: String,
+    /// Initial state of the web-search toggle (default ON; `/search`
+    /// switches it at runtime).
+    pub web_search: bool,
+}
+
+impl Default for TelegramConfig {
+    fn default() -> Self {
+        Self {
+            bot_token: String::new(),
+            allow_user_ids: Vec::new(),
+            system_prompt: None,
+            history: 20,
+            thinking: "default".into(),
+            web_search: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub proxy: ProxyConfig,
+    /// Dashboard chat web search. When a chat body
+    /// carries `web_search: true` (the dashboard's globe toggle), the proxy
+    /// injects a `web_search` tool into the upstream request and runs the
+    /// agent loop (model decides → the proxy searches → model answers).
+    /// Search engine: Exa's free keyless MCP endpoint (the same one pi
+    /// uses); `exa_api_key` optionally lifts its rate limits.
+    #[serde(default)]
+    pub web_search: WebSearchConfig,
     /// Bridge mode: address ("host:port") of the remote llm_proxy. This
     /// instance has no local backend: all proxy traffic is forwarded
     /// there (the remote runs its own cold-start logic) and the local
@@ -133,6 +184,11 @@ pub struct Config {
     /// printed once — copy it into the bridge configs).
     #[serde(default)]
     pub token: Option<String>,
+    /// Optional Telegram bot: dashboard chat + status from Telegram.
+    /// Absent section = off (zero cost). Long polling only — outbound HTTPS
+    /// to api.telegram.org, no public port, no webhook.
+    #[serde(default)]
+    pub telegram: Option<TelegramConfig>,
     /// Bind host for proxy and stats servers (default `127.0.0.1`).
     /// `0.0.0.0` exposes both on the LAN — meaningful only together with a
     /// token (the bridge on another machine needs to reach the proxy port).
@@ -153,6 +209,14 @@ impl Config {
         if let Some(b) = &cfg.bind {
             if b.trim().is_empty() {
                 bail!("bind: empty value (use \"127.0.0.1\" or \"0.0.0.0\")");
+            }
+        }
+        if let Some(tg) = &cfg.telegram {
+            if tg.bot_token.trim().is_empty() {
+                bail!("[telegram]: bot_token is empty — remove the section to disable the bot");
+            }
+            if !matches!(tg.thinking.as_str(), "default" | "off" | "low" | "medium" | "high" | "xhigh") {
+                bail!("[telegram]: thinking must be one of default|off|low|medium|high|xhigh (got '{}')", tg.thinking);
             }
         }
         if let Some(remote) = &cfg.remote {
@@ -374,6 +438,20 @@ pub fn load_config() -> Result<Config> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn alpha_debug_remote_parses() {
+        let cfg = Config::parse(
+            r#"
+remote = "127.0.0.1:9931"
+[proxy]
+port = 19931
+stats_port = 19935
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.remote.as_deref(), Some("127.0.0.1:9931"));
+    }
+
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -411,6 +489,7 @@ mod tests {
         // the Config by hand — the method under test only needs self.path.
         let mut cfg = Config {
             proxy: ProxyConfig { port: 1, stats_port: 2 },
+            web_search: WebSearchConfig::default(),
             remote: None,
             active_profile: Some("a".into()),
             token: None,
@@ -454,6 +533,7 @@ mod tests {
         std::fs::write(&path, raw).unwrap();
         let cfg = Config {
             proxy: ProxyConfig { port: 1, stats_port: 2 },
+            web_search: WebSearchConfig::default(),
             remote: None,
             active_profile: None,
             token: Some(tok.clone()),
